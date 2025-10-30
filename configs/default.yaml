@@ -1,0 +1,77 @@
+# configs/default.yaml
+io:
+  keep_tables: true
+  ignore_sections:
+    - "Tài liệu tham khảo"
+    - "Lời cảm ơn"
+    - "Lời cam đoan"
+    - "Mục lục"
+  export:
+    json: true
+    html_report: true
+    out_dir: "outputs"
+
+preprocess:
+  accent_dual_versions: true
+  abbreviations_expand: true
+  remove_boilerplate: true
+  lowercase: true
+  unicode_normalize: "NFC"
+  strip_punctuation: false
+
+dictionary_paths:
+  stop_phrases: "data/dictionaries/stop_phrases_vi.txt"
+  synonyms: "data/dictionaries/synonyms_vi.tsv"
+  abbreviations: "data/dictionaries/abbreviations.tsv"
+  gazetteer: "data/dictionaries/gazetteer_entities.tsv"
+  boilerplate: "data/patterns/boilerplate_vi.txt"
+  section_headers: "data/patterns/section_headers.txt"
+
+chunking:
+  size_tokens: 260
+  overlap: 50
+  max_seq_len_bi: 256
+  max_seq_len_cross: 384
+
+bm25:
+  k1: 1.2
+  b: 0.75
+  topk: 30
+
+simhash:
+  ngram: 7
+  window: 10
+  topk: 50
+
+ann:
+  topk_recall: 50
+  topk_rerank: 10
+
+ranking:
+  alpha: 0.55 # cross-encoder
+  beta: 0.25 # bi-encoder
+  gamma: 0.15 # lexical (n-gram/SimHash)
+  delta: 0.05 # bm25
+
+thresholds:
+  high: 0.82
+  medium: 0.72
+  low: 0.62
+domain_dicts:
+  enabled: true
+  paths:
+    - "data/dictionaries/domain/it_terms.tsv"
+    - "data/dictionaries/domain/economics_terms.tsv"
+    - "data/dictionaries/domain/ee_terms.tsv"
+domain_boilerplate:
+  enabled: true
+  paths:
+    - "data/patterns/boilerplate_it.txt"
+    - "data/patterns/boilerplate_economics.txt"
+    - "data/patterns/boilerplate_ee.txt"
+    - "data/patterns/boilerplate_law_vi.txt"
+penalties:
+  lex_boilerplate_lambda: 0.5   # 0..1, mức phạt áp vào điểm lex
+  min_span_chars: 24            # yêu cầu span tối thiểu cho 1 hit
+  min_small_spans: 2            # hoặc >=2 spans với chiều dài >= small_span_chars
+  small_span_chars: 12

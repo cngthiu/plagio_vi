@@ -1,0 +1,76 @@
+Bảo vệ dữ liệu cá nhân
+Xử lý dữ liệu cá nhân
+Mục đích xử lý dữ liệu
+Căn cứ pháp lý cho việc xử lý
+Đồng ý của chủ thể dữ liệu
+Rút lại sự đồng ý
+Nguyên tắc bảo vệ dữ liệu
+Giới hạn mục đích
+Tối thiểu hóa dữ liệu
+Độ chính xác của dữ liệu
+Giới hạn lưu trữ
+Toàn vẹn và bảo mật
+Trách nhiệm giải trình
+Quyền được thông tin
+Quyền truy cập dữ liệu
+Quyền chỉnh sửa dữ liệu
+Quyền xóa dữ liệu
+Quyền hạn chế xử lý
+Quyền phản đối xử lý
+Quyền di chuyển dữ liệu
+Chuyển dữ liệu ra nước ngoài
+Biện pháp bảo vệ thích hợp
+Đánh giá tác động bảo vệ dữ liệu
+Thông báo vi phạm dữ liệu
+Vi phạm bảo mật dữ liệu
+Bên kiểm soát dữ liệu
+Bên xử lý dữ liệu
+Bên thứ ba
+Hợp đồng xử lý dữ liệu
+Chính sách bảo mật
+Chính sách cookie
+Thu thập dữ liệu tự động
+Dữ liệu nhạy cảm
+Dữ liệu định danh cá nhân
+Mã định danh trực tuyến
+Theo dõi hành vi
+Mục đích tiếp thị trực tiếp
+Calo thu thập tối thiểu
+Cơ sở pháp lý hợp pháp
+Lợi ích hợp pháp
+Thực hiện hợp đồng
+Tuân thủ nghĩa vụ pháp lý
+Bảo vệ lợi ích sống còn
+Thực hiện nhiệm vụ vì lợi ích công
+Cơ chế khiếu nại
+Giải quyết khiếu nại
+Cơ quan có thẩm quyền
+Chế tài xử phạt
+Xử phạt vi phạm hành chính
+Trách nhiệm bồi thường
+Lưu trữ và hủy dữ liệu
+Ẩn danh và bút danh
+Thiết kế bảo mật ngay từ đầu
+Mặc định bảo mật
+Quy trình quản trị dữ liệu
+Chia sẻ dữ liệu với bên thứ ba
+Đảm bảo an ninh thông tin
+Mã hóa dữ liệu
+Kiểm soát truy cập
+Ghi nhật ký và giám sát
+Đào tạo nhận thức bảo mật
+Đánh giá nhà cung cấp
+Ràng buộc hợp đồng
+Chính sách lưu trữ
+Thời hạn lưu trữ
+Xóa hoặc ẩn danh khi hết hạn
+Thông báo thay đổi chính sách
+Cập nhật chính sách
+Nghị định 13/2023/NĐ-CP
+Luật An ninh mạng
+Luật An toàn thông tin mạng
+Pháp luật quốc tế
+Pháp luật Việt Nam
+Quy định của Liên minh Châu Âu
+Quy định bảo vệ dữ liệu chung
+Điều khoản và điều kiện

@@ -1,0 +1,14 @@
+# configs/indexing.faiss.hnsw.yaml
+# Chỉ số HNSW cho recall cao; có tuỳ chọn IVF-PQ nếu corpus lớn
+type: "HNSW"
+metric: "cosine"         # hoặc "l2"
+dim: 768                 # tuỳ theo bi-encoder
+hnsw:
+  M: 64
+  ef_construction: 200
+  ef_search: 64
+# Nếu muốn IVF-PQ, chuyển type="IVF_PQ" và bật block dưới:
+ivf_pq:
+  nlist: 4096
+  m: 16
+  nbits: 8

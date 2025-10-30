@@ -1,0 +1,3 @@
+Trong lĩnh vực công nghệ thông tin, chúng tôi trình bày
+Phần tiếp theo mô tả kiến trúc hệ thống
+Cấu trúc dữ liệu và giải thuật được tổ chức như sau

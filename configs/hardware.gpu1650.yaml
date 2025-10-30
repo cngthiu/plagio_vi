@@ -1,0 +1,25 @@
+# configs/hardware.gpu1650.yaml
+# GTX 1650 Max-Q (≈4GB), CUDA 11.8, Turing (SM 7.5)
+device:
+  use_gpu: true
+  torch_dtype: "float16"
+  max_gpu_mem_gb: 3.8
+  omp_threads: 8
+  mkl_threads: 8
+
+inference:
+  bi_encoder:
+    backend: "torch"       # FP16 trên GPU; nếu thiếu VRAM -> onnx int8
+    quantize: "fp16"
+    batch_size_gpu: 32
+    max_seq_len: 256
+  cross_encoder:
+    backend: "torch"
+    quantize: "fp16"
+    batch_size_gpu: 6
+    max_seq_len: 384
+
+index:
+  faiss:
+    use_gpu: false         # FAISS GPU không ổn định trên 4GB -> dùng CPU
+    cfg_path: "configs/indexing.faiss.hnsw.yaml"

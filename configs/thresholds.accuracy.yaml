@@ -1,0 +1,18 @@
+# configs/thresholds.accuracy.yaml
+ranking_weights:
+  alpha: 0.55
+  beta: 0.25
+  gamma: 0.15
+  delta: 0.05
+
+decision_thresholds:
+  very_high: 0.87
+  high: 0.82
+  medium: 0.72
+  low: 0.62
+
+postprocess_rules:
+  min_chars_span: 40
+  merge_adjacent_gap_chars: 20
+  penalize_gazetteer_overlap: true
+  boilerplate_masking: true

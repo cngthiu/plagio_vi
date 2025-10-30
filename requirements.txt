@@ -1,0 +1,47 @@
+# Core numeric & utils
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.2.2
+orjson==3.10.7
+tqdm==4.66.4
+pydantic==2.8.2
+pyyaml==6.0.2
+uvicorn==0.30.5
+fastapi==0.114.0
+
+# NLP & models
+transformers==4.44.2
+sentence-transformers==3.0.1
+accelerate==0.33.0
+tokenizers==0.19.1
+sentencepiece==0.2.0
+
+# Torch (CPU by default). For GPU install, see README to pick CUDA wheel.
+torch==2.3.1
+torchaudio==2.3.1
+torchvision==0.18.1
+
+# ONNX Runtime (CPU). GPU variant optional in README.
+onnxruntime==1.18.1
+
+# ANN / FAISS
+faiss-cpu==1.8.0
+
+# Text processing & DOCX/PDF
+python-docx==1.1.2
+lxml==5.2.2
+rapidfuzz==3.9.6
+regex==2024.7.24
+nltk==3.9.1
+PyMuPDF==1.24.9    # optional for PDF
+
+# Search & BM25
+rank-bm25==0.2.2
+
+# Optional GPU quantization (enable per README)
+bitsandbytes==0.43.2
+
+# Web UI (optional)
+gradio==4.44.0
+
+rapidfuzz==3.9.6

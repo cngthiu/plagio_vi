@@ -1,0 +1,24 @@
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore output folder
+outputs/
+
+# Ignore models folder inside plagio_vi
+bi_encoder/
+cross_encoder/
+onnx/
+# (Optional) Ignore virtual environment
+.venv/
+env/
+venv/
+
+# (Optional) Ignore Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# (Optional) Ignore VSCode and PyCharm settings
+.vscode/
+.idea/

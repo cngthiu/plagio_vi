@@ -1,0 +1,23 @@
+# configs/hardware.cpu.yaml
+device:
+  use_gpu: false
+  torch_dtype: "float32"
+  omp_threads: 10
+  mkl_threads: 10
+
+inference:
+  bi_encoder:
+    backend: "onnx"        # INT8/CPU nhanh
+    quantize: "int8"
+    batch_size_cpu: 64
+    max_seq_len: 256
+  cross_encoder:
+    backend: "torch"
+    quantize: "fp32"
+    batch_size_cpu: 4
+    max_seq_len: 384
+
+index:
+  faiss:
+    use_gpu: false
+    cfg_path: "configs/indexing.faiss.hnsw.yaml"
