@@ -2,17 +2,17 @@
 from typing import List
 import numpy as np
 from rank_bm25 import BM25Okapi
-from src.preprocess.tokenizer_vi import simple_tokenize
+from src.preprocess.tokenizer_vi import vi_word_tokenize
 
 
 class BM25Index:
     def __init__(self, corpus_chunks: List[str]):
-        self.docs = [simple_tokenize(c) for c in corpus_chunks]
+        self.docs = [vi_word_tokenize(c) for c in corpus_chunks]
         self.model = BM25Okapi(self.docs)
         self._last_scores: np.ndarray | None = None
 
     def search(self, query_text: str, topk: int = 30) -> List[int]:
-        query = simple_tokenize(query_text)
+        query = vi_word_tokenize(query_text)
         scores = self.model.get_scores(query)  # list-like
         # store as numpy array for safe indexing
         self._last_scores = np.asarray(scores, dtype=np.float32)

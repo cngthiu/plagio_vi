@@ -9,9 +9,26 @@ class CrossEncoder:
     def __init__(self, device_cfg: dict, max_seq_len: int = 384, backend: str = "torch", quantize: str = "fp16", model_name: str = None):
         self.device = torch.device("cuda") if device_cfg["use_gpu"] else torch.device("cpu")
         self.max_seq_len = max_seq_len
-        self.model_name = model_name or "cross-encoder/ms-marco-MiniLM-L-12-v2"
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name).to(self.device)
+        candidates = [model_name] if model_name else [
+            "bkai-foundation-models/vietnamese-cross-encoder",
+            "cross-encoder/ms-marco-MiniLM-L-12-v2",
+        ]
+        last_err = None
+        self.model = None
+        self.tokenizer = None
+        for name in candidates:
+            if not name:
+                continue
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(name)
+                self.model = AutoModelForSequenceClassification.from_pretrained(name).to(self.device)
+                self.model_name = name
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError(f"Could not load any cross-encoder from candidates: {candidates}") from last_err
         if device_cfg["use_gpu"] and device_cfg.get("torch_dtype") == "float16":
             self.model.half()
         self.model.eval()
@@ -30,4 +47,3 @@ class CrossEncoder:
         # map logits to (0,1) via sigmoid for consistency
         import math
         return [1/(1+math.exp(-x)) for x in scores]
-

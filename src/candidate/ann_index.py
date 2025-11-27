@@ -67,7 +67,8 @@ class ANNIndex:
         if self.cfg.get("metric", "cosine") == "cosine" and faiss is not None:
             faiss.normalize_L2(qv)
         D, I = self.index.search(qv, topk)
-        return I[0].tolist()
+        valid = [idx for idx in I[0].tolist() if idx is not None and idx >= 0]
+        return valid
 
     def save(self, path):
         if faiss is not None and self.index is not None:

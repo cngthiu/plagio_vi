@@ -66,12 +66,13 @@ domain_dicts:
 domain_boilerplate:
   enabled: true
   paths:
-    - "data/patterns/boilerplate_it.txt"
+    - "data/patterns/domain_economics.txt"
     - "data/patterns/boilerplate_economics.txt"
     - "data/patterns/boilerplate_ee.txt"
     - "data/patterns/boilerplate_law_vi.txt"
+    - "data/patterns/phrases_common.txt"
 penalties:
-  lex_boilerplate_lambda: 0.5   # 0..1, mức phạt áp vào điểm lex
-  min_span_chars: 24            # yêu cầu span tối thiểu cho 1 hit
-  min_small_spans: 2            # hoặc >=2 spans với chiều dài >= small_span_chars
+  lex_boilerplate_lambda: 0.5 # 0..1, mức phạt áp vào điểm lex
+  min_span_chars: 24 # yêu cầu span tối thiểu cho 1 hit
+  min_small_spans: 2 # hoặc >=2 spans với chiều dài >= small_span_chars
   small_span_chars: 12

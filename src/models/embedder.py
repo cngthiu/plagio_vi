@@ -11,10 +11,28 @@ class BiEncoder:
         self.max_seq_len = max_seq_len
         self.backend = backend
         self.quantize = quantize
-        self.model_name = model_name or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        # Why: tránh phụ thuộc nặng, chọn model nhỏ đa ngôn ngữ.
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer(self.model_name, device=str(self.device))
+
+        candidates = [model_name] if model_name else [
+            # Ưu tiên model tiếng Việt, fallback đa ngôn ngữ.
+            "bkai-foundation-models/vietnamese-bi-encoder",
+            "keepitreal/vietnamese-sbert",
+            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        ]
+        last_err = None
+        for name in candidates:
+            if not name:
+                continue
+            try:
+                self.model = SentenceTransformer(name, device=str(self.device))
+                self.model_name = name
+                break
+            except Exception as e:  # pragma: no cover - only hit if missing model
+                last_err = e
+                continue
+        else:
+            raise RuntimeError(f"Could not load any bi-encoder from candidates: {candidates}") from last_err
+
         if device_cfg["use_gpu"] and device_cfg.get("torch_dtype") == "float16":
             self.model = self.model.half()
 

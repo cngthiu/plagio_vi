@@ -8,9 +8,8 @@ import yaml
 
 from src.io.docx_reader import read_docx_with_tables
 from src.preprocess.normalize_vi import normalize_text_dual
-from src.preprocess.sentence_seg import split_sentences_vi
-from src.preprocess.tokenizer_vi import simple_tokenize
-from src.preprocess.chunker import chunk_tokens_with_overlap
+from src.preprocess.sentence_seg import split_sentences_with_offsets_vi
+from src.preprocess.chunker import chunk_sentences_window
 from src.models.embedder import BiEncoder
 from src.candidate.ann_index import ANNIndex
 from src.utils.hardware import select_device_config
@@ -43,10 +42,16 @@ def main():
         norm_acc, _ = normalize_text_dual(doc.linearized_text,
                                           lowercase=cfg["preprocess"]["lowercase"],
                                           unicode_norm=cfg["preprocess"]["unicode_normalize"])
-        sents = split_sentences_vi(norm_acc)
-        toks = [t for s in sents for t in simple_tokenize(s)]
-        chunks, _ = chunk_tokens_with_overlap(toks, size=cfg["chunking"]["size_tokens"], overlap=cfg["chunking"]["overlap"])
-        all_chunks.extend(chunks)
+        sents_with_off = split_sentences_with_offsets_vi(norm_acc)
+        align, disp, _ = chunk_sentences_window(
+            norm_acc,
+            sents_with_off,
+            size_tokens=cfg["chunking"]["size_tokens"],
+            overlap_tokens=cfg["chunking"]["overlap"],
+            lowercase=cfg["preprocess"]["lowercase"]
+        )
+        # align và disp giống nhau ở đây vì đã normalize; dùng disp cho embedding
+        all_chunks.extend(disp)
 
     emb = bi.encode(all_chunks, batch_size=(hw["inference"]["bi_encoder"].get("batch_size_gpu")
                                             or hw["inference"]["bi_encoder"].get("batch_size_cpu", 32)))

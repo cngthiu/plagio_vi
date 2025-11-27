@@ -1,11 +1,19 @@
 // ================================
 // file: webui/assets/app.js  (FULL)
 // ================================
-let gReport=null, gReportPath=null, gPairsFiltered=[], gPage=1, gPageSize=100;
+let gReport=null, gReportPath=null, gPairsFiltered=[], gPage=1, gPageSize=50;
 let donut=null, progressTimer=null, progressVal=0;
+let gSelectedIndex=-1, gActiveCard=null;
 
 const $ = (id)=>document.getElementById(id);
 const esc = (s)=> (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const runStatusEl = $('runStatus');
+const emptyResultsEl = $('emptyResults');
+const btnRun = $('btnRun');
+const pageSizeSelect = $('pageSize');
+if(pageSizeSelect){
+  gPageSize = parseInt(pageSizeSelect.value || '50', 10);
+}
 
 function setTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
@@ -15,6 +23,12 @@ $('btnDark').onclick = ()=>{
   const html=document.documentElement;
   html.setAttribute('data-theme', html.getAttribute('data-theme')==='dark'?'light':'dark');
 };
+
+function setStatus(text, tone='subtle'){
+  if(!runStatusEl) return;
+  runStatusEl.textContent = text;
+  runStatusEl.className = `status-pill ${tone}`;
+}
 
 // ---------- donuts / metrics ----------
 function renderDonut(percent){
@@ -41,6 +55,24 @@ function unionIntervals(intervals){
   return out;
 }
 function countWordsByChars(chars){ return Math.round(chars/5.5); }
+function renderMarked(text, spans){
+  const content = text || '';
+  const markers = (spans || []).slice().sort((a,b)=>a[0]-b[0]);
+  let cur = 0;
+  const buf = ['<pre>'];
+  for(const [rawS, rawE] of markers){
+    const s = Math.max(0, Math.min(content.length, rawS));
+    const e = Math.max(0, Math.min(content.length, rawE));
+    if(cur < s) buf.push(esc(content.slice(cur, s)));
+    if(e > s) buf.push('<mark>'+esc(content.slice(s, e))+'</mark>');
+    cur = Math.max(cur, e);
+  }
+  if(cur < content.length){
+    buf.push(esc(content.slice(cur)));
+  }
+  buf.push('</pre>');
+  return `<div class="result-text">${buf.join('')}</div>`;
+}
 function buildDocMetrics(report){
   let docLen = 0;
   const globalSpansA=[];
@@ -60,41 +92,106 @@ function buildDocMetrics(report){
   return { docLen, matchedChars, percent, matchedWords };
 }
 
-// ---------- Results table ----------
-function renderRowsPage(){
-  const tbody=$('resultsBody'); tbody.innerHTML='';
-  const start=(gPage-1)*gPageSize, end=Math.min(start+gPageSize, gPairsFiltered.length);
-  $('pageInfo').innerText=`Trang ${gPage}/${Math.max(1, Math.ceil(gPairsFiltered.length/gPageSize))}`;
-  for(let idx=start; idx<end; idx++){
-    const r=gPairsFiltered[idx];
-    const tr=document.createElement('tr');
-    tr.innerHTML=`
-      <td>${idx+1}</td>
-      <td>${(r.score??0).toFixed(3)}</td>
-      <td>${r.level||''}</td>
-      <td>A[${r.a_chunk_id}]</td>
-      <td>B[${r.b_chunk_id}]</td>
-      <td class="preview">${esc(r.a?.text||'').slice(0,200)}</td>`;
-    tr.onclick=()=>showDetail(r);
-    tbody.appendChild(tr);
+// ---------- Results list ----------
+function renderResultsPage(){
+  const list=$('resultsList');
+  if(!list){ return; }
+  list.innerHTML='';
+  const totalPages = Math.max(1, Math.ceil(Math.max(1, gPairsFiltered.length)/gPageSize));
+  gPage = Math.min(Math.max(1, gPage), totalPages);
+  const start=(gPage-1)*gPageSize;
+  const end=Math.min(start+gPageSize, gPairsFiltered.length);
+  if(gPairsFiltered.length){
+    if(gSelectedIndex < start || gSelectedIndex >= end){
+      gSelectedIndex = start;
+    }
+  } else {
+    gSelectedIndex = -1;
+  }
+  const detailRecord = (gSelectedIndex >=0 && gSelectedIndex < gPairsFiltered.length) ? gPairsFiltered[gSelectedIndex] : null;
+  const pageInfo=$('pageInfo');
+  if(pageInfo){
+    pageInfo.innerText = gPairsFiltered.length ? `Trang ${gPage}/${Math.max(1, Math.ceil(gPairsFiltered.length/gPageSize))}` : '';
+  }
+  gActiveCard = null;
+  for(let offset=0; start + offset < end; offset++){
+    const idx = start + offset;
+    const r = gPairsFiltered[idx];
+    const matchChars = (r.a?.spans||[]).reduce((acc,[s,e])=>acc + Math.max(0, e - s), 0);
+    const matchWords = countWordsByChars(matchChars);
+    const matchCount = (r.a?.spans || []).length;
+    const card=document.createElement('div');
+    card.className='result-card';
+    if(idx === gSelectedIndex){ card.classList.add('active'); gActiveCard = card; }
+    const firstSnippet = (r.a?.snippets||[])[0]?.hit || '';
+    card.innerHTML = `
+      <div class="result-header">
+        <span class="result-index">Cặp ${idx+1}</span>
+        <div class="result-meta">
+          <span class="result-pill">~${matchWords} từ trùng</span>
+          <span class="result-pill">${matchCount} cụm</span>
+        </div>
+      </div>
+      <div class="result-body">
+        <div class="result-section">
+          <div class="result-label">Tài liệu A</div>
+          ${renderMarked(r.a?.text||'', r.a?.spans||[])}
+        </div>
+        <div class="result-section">
+          <div class="result-label">Nguồn khớp</div>
+          ${renderMarked(r.b?.text||'', r.b?.spans||[])}
+        </div>
+      </div>
+      ${firstSnippet ? `<div class="result-snippet">Cụm nổi bật: <mark>${esc(firstSnippet)}</mark></div>` : ''}`;
+    card.onclick=()=>{
+      gSelectedIndex = idx;
+      if(gActiveCard){ gActiveCard.classList.remove('active'); }
+      card.classList.add('active');
+      gActiveCard = card;
+      showDetail(r);
+    };
+    list.appendChild(card);
+  }
+  if(detailRecord){
+    showDetail(detailRecord);
+  } else {
+    const detailA=$('detailA'); if(detailA) detailA.innerHTML='';
+    const detailB=$('detailB'); if(detailB) detailB.innerHTML='';
+    $('snipsA').innerHTML=''; $('snipsB').innerHTML='';
+    $('matchListA').innerHTML=''; $('matchListB').innerHTML='';
+  }
+}
+function updateEmptyState(){
+  if(!emptyResultsEl) return;
+  const has = gPairsFiltered.length > 0;
+  emptyResultsEl.classList.toggle('hidden', has);
+  const list = $('resultsList');
+  if(list){
+    list.classList.toggle('hidden', !has);
   }
 }
 function applyFilters(){
-  if(!gReport || !Array.isArray(gReport.pairs)) { $('resultsBody').innerHTML=''; return; }
+  if(!gReport || !Array.isArray(gReport.pairs)) {
+    gPairsFiltered = [];
+    const list=$('resultsList'); if(list) list.innerHTML='';
+    updateEmptyState();
+    return;
+  }
   const level=$('filterLevel').value, q=$('searchText').value.trim().toLowerCase();
-  const minCross=parseFloat($('minCross').value||'0'), minBi=parseFloat($('minBi').value||'0');
   const sortBy=$('sortBy').value;
   let pairs=gReport.pairs.slice();
   if(level) pairs=pairs.filter(r=>r.level===level);
-  if(!Number.isNaN(minCross) && minCross>0) pairs=pairs.filter(r=>(r.scores?.cross||0)>=minCross);
-  if(!Number.isNaN(minBi) && minBi>0) pairs=pairs.filter(r=>(r.scores?.bi||0)>=minBi);
   if(q){ pairs=pairs.filter(r=>(r.a?.text||'').toLowerCase().includes(q) || (r.b?.text||'').toLowerCase().includes(q)); }
-  const key={
-    'score_desc': r=>r.score??0, 'cross_desc': r=>r.scores?.cross??0,
-    'bi_desc': r=>r.scores?.bi??0, 'lex_desc': r=>r.scores?.lex??0
-  }[sortBy] || (r=>r.score??0);
-  pairs.sort((a,b)=>key(b)-key(a));
-  gPairsFiltered=pairs; gPage=1; renderRowsPage();
+  if(sortBy === 'score_desc'){
+    pairs.sort((a,b)=> (b.score??0) - (a.score??0));
+  } else if(sortBy === 'a_order'){
+    pairs.sort((a,b)=> (a.a_chunk_id??0) - (b.a_chunk_id??0));
+  }
+  gPairsFiltered=pairs;
+  gPage=1;
+  gSelectedIndex = gPairsFiltered.length ? 0 : -1;
+  renderResultsPage();
+  updateEmptyState();
 }
 
 // ---------- Sources ----------
@@ -144,8 +241,6 @@ function renderOverview(report){
 
 // ---------- Detail (two-column + match pairs) ----------
 function showDetail(r){
-  $('aid').innerText=`[${r.a_chunk_id}]`; $('bid').innerText=`[${r.b_chunk_id}]`;
-
   const only = $('onlyMatches').checked;
   const aText = r.a?.text || '', bText = r.b?.text || '';
   const aSpans = r.a?.spans || [], bSpans = r.b?.spans || [];
@@ -200,16 +295,18 @@ $('onlyMatches').addEventListener('change', ()=>{
 
 // ---------- Load report ----------
 async function loadReport(path){
+  setStatus('Đang mở report...', 'loading');
   const res = await fetch(`/api/report?path=${encodeURIComponent(path)}`);
-  if(!res.ok){ alert('Không mở được report.json'); return; }
+  if(!res.ok){ alert('Không mở được report.json'); setStatus('Không mở được report', 'error'); return; }
   let data = await res.json();
-  if(typeof data==='string'){ try{ data=JSON.parse(data); }catch{ alert('Report không hợp lệ'); return; } }
-  if(!data || !Array.isArray(data.pairs)){ alert('Report thiếu "pairs"'); return; }
+  if(typeof data==='string'){ try{ data=JSON.parse(data); }catch{ alert('Report không hợp lệ'); setStatus('Report không hợp lệ', 'error'); return; } }
+  if(!data || !Array.isArray(data.pairs)){ alert('Report thiếu "pairs"'); setStatus('Report thiếu dữ liệu', 'error'); return; }
   gReport = data; gReportPath = path;
   setTab('results');
   renderOverview(gReport);
   applyFilters();
   $('btnOpenHtml').onclick=(e)=>{ e.preventDefault(); window.open(`/api/download_report_html?path=${encodeURIComponent(path.replace(/report\.json$/,'report.html'))}`,'_blank'); };
+  setStatus('Đã mở report có sẵn', 'ok');
 }
 
 // ---------- Compare (progress ramp) ----------
@@ -287,7 +384,9 @@ $('btnSaveSettings').onclick = ()=>{
 async function runCompare(){
   const aFile=$('fileA').files[0], bFile=$('fileB').files[0];
   if(!aFile || !bFile){ alert('Chọn đủ 2 file DOCX'); return; }
-  $('runStatus').innerText='Đang chạy...'; startProgress();
+  setStatus('Đang so khớp...', 'loading');
+  if(btnRun){ btnRun.disabled = true; btnRun.setAttribute('aria-busy','true'); }
+  startProgress();
   const fd=new FormData();
   fd.append('a', aFile); fd.append('b', bFile);
   fd.append('out', $('outDir').value.trim() || 'outputs/webui_run');
@@ -297,26 +396,74 @@ async function runCompare(){
     const res=await fetch('/api/compare', {method:'POST', body:fd});
     const data=await res.json();
     if(!res.ok || !data.ok) throw new Error(data.detail||'Compare failed');
-    $('runStatus').innerText='Hoàn tất ✓ — Loading report...';
+    setStatus('Hoàn tất ✓ — đang tải báo cáo...', 'loading');
     $('reportPath').value=data.report_json;
     await loadReport(data.report_json);
-    $('runStatus').innerText='Hoàn tất ✓'; finishProgress();
+    setStatus('Hoàn tất ✓', 'ok');
+    finishProgress();
   }catch(e){
     console.error(e);
-    $('runStatus').innerText='Lỗi: '+e.message;
+    setStatus(`Lỗi: ${e.message}`, 'error');
     finishProgress();
     alert('Lỗi so khớp: '+e.message);
+  } finally{
+    if(btnRun){ btnRun.disabled = false; btnRun.removeAttribute('aria-busy'); }
   }
 }
 
 // ---------- Events ----------
 document.querySelectorAll('.tab').forEach(btn=> btn.addEventListener('click', ()=> setTab(btn.dataset.tab)));
-$('compare-form').addEventListener('submit', (e)=>{ e.preventDefault(); runCompare(); });
-$('btnLoadReport').onclick = ()=> {
-  const p=$('reportPath').value.trim(); if(!p){ alert('Nhập report.json'); return; } loadReport(p);
-};
-['filterLevel','searchText','sortBy','minCross','minBi'].forEach(id=> $(id).addEventListener('input', applyFilters));
-$('prevPage').onclick=()=>{ if(gPage>1){ gPage--; renderRowsPage(); }};
-$('nextPage').onclick=()=>{ const max=Math.max(1, Math.ceil(gPairsFiltered.length/gPageSize)); if(gPage<max){ gPage++; renderRowsPage(); }};
-$('pageSize').onchange=()=>{ gPageSize=parseInt($('pageSize').value||'100'); gPage=1; renderRowsPage(); };
-$('btnExportCSV').onclick=()=>{ if(!gReportPath){ alert('Chưa mở report'); return; } window.open(`/api/export_csv?report_path=${encodeURIComponent(gReportPath)}`,'_blank'); };
+const compareForm = $('compare-form');
+if(compareForm){
+  compareForm.addEventListener('submit', (e)=>{ e.preventDefault(); runCompare(); });
+}
+const btnLoadReport = $('btnLoadReport');
+if(btnLoadReport){
+  btnLoadReport.addEventListener('click', ()=>{
+    const p=$('reportPath').value.trim();
+    if(!p){ alert('Nhập report.json'); return; }
+    loadReport(p);
+  });
+}
+$('filterLevel').addEventListener('change', applyFilters);
+$('sortBy').addEventListener('change', applyFilters);
+$('searchText').addEventListener('input', applyFilters);
+const prevBtn = $('prevPage');
+if(prevBtn){
+  prevBtn.addEventListener('click', ()=>{
+    if(gPage>1){
+      gPage--;
+      renderResultsPage();
+    }
+  });
+}
+const nextBtn = $('nextPage');
+if(nextBtn){
+  nextBtn.addEventListener('click', ()=>{
+    const max=Math.max(1, Math.ceil(gPairsFiltered.length/gPageSize));
+    if(gPage<max){
+      gPage++;
+      renderResultsPage();
+    }
+  });
+}
+if(pageSizeSelect){
+  pageSizeSelect.addEventListener('change', ()=>{
+    gPageSize = parseInt(pageSizeSelect.value || '50', 10);
+    gPage = 1;
+    renderResultsPage();
+    updateEmptyState();
+  });
+}
+const btnExport = $('btnExportCSV');
+if(btnExport){
+  btnExport.addEventListener('click', ()=>{
+    if(!gReportPath){
+      alert('Chưa mở report');
+      return;
+    }
+    window.open(`/api/export_csv?report_path=${encodeURIComponent(gReportPath)}`,'_blank');
+  });
+}
+updateEmptyState();
+setStatus('Sẵn sàng', 'subtle');

@@ -1,209 +1,459 @@
 <!-- ================================
 file: webui/assets/index.html  (FULL)
 ================================ -->
-<!doctype html>
+<!DOCTYPE html>
 <html lang="vi" data-theme="light">
-<head>
-  <meta charset="utf-8"/>
-  <title>plagio_vi — So khớp & trực quan</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/assets/styles.css"/>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">plagio_vi</div>
-  <nav class="nav">
-    <button id="btnDark" class="btn ghost" title="Dark / Light">🌙</button>
-    <a id="btnOpenHtml" class="btn ghost" href="#">Report HTML</a>
-  </nav>
-</header>
+  <head>
+    <meta charset="utf-8" />
+    <title>Plagio_VI</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">PLAGIO_VI</div>
+      <nav class="nav">
+        <button id="btnDark" class="btn ghost" title="Dark / Light">🌙</button>
+        <a id="btnOpenHtml" class="btn ghost" href="#">Report HTML</a>
+      </nav>
+    </header>
 
-<main class="container">
-  <div class="tabs">
-    <button class="tab active" data-tab="compare">So khớp</button>
-    <button class="tab" data-tab="results">Kết quả</button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </div>
+    <main class="container">
+      <div class="tabs">
+        <button class="tab active" data-tab="compare">So khớp</button>
+        <button class="tab" data-tab="results">Kết quả</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </div>
 
-  <!-- So khớp -->
-  <section id="tab-compare" class="tabpane active">
-    <div class="card">
-      <h2>Chọn tài liệu</h2>
-      <form id="compare-form">
+      <!-- So khớp -->
+      <section id="tab-compare" class="tabpane active">
+        <div class="card intro">
+          <h2>plagio_vi dành cho người dùng</h2>
+          <p class="muted">
+            Tải 2 tài liệu DOCX để kiểm tra trùng lặp, tuỳ chỉnh ngưỡng nếu cần,
+            và theo dõi tiến trình trực tiếp trong trình duyệt.
+          </p>
+          <ol class="steps">
+            <li><b>Chọn tài liệu</b> A và B (định dạng .docx).</li>
+            <li>
+              <b>Tùy chỉnh tùy chọn</b> đầu ra, thư mục lưu, và (nếu đã chạy)
+              nhập đường dẫn report có sẵn.
+            </li>
+            <li>
+              <b>Nhấn “Chạy so khớp”</b> để bắt đầu — tiến trình và báo cáo hiển
+              thị ngay khi hoàn tất.
+            </li>
+          </ol>
+          <div class="tips muted small">
+            Mẹo: Bạn có thể mở lại kết quả cũ bằng việc dán đường dẫn tới
+            <code>report.json</code>; công cụ không cần chạy lại toàn bộ
+            pipeline.
+          </div>
+        </div>
+        <div class="card">
+          <h2>So khớp tài liệu</h2>
+          <form id="compare-form">
+            <div class="grid2 grid-gap">
+              <div>
+                <label>Tài liệu A (.docx) <span class="req">*</span></label>
+                <input type="file" id="fileA" accept=".docx" required />
+              </div>
+              <div>
+                <label>Tài liệu B (.docx) <span class="req">*</span></label>
+                <input type="file" id="fileB" accept=".docx" required />
+              </div>
+            </div>
+            <div class="grid2 grid-gap">
+              <div>
+                <label>Thư mục lưu kết quả</label>
+                <input
+                  type="text"
+                  id="outDir"
+                  value="outputs/webui_run"
+                  placeholder="outputs/webui_run"
+                />
+              </div>
+              <div>
+                <label>Report JSON đã có (tuỳ chọn)</label>
+                <input
+                  type="text"
+                  id="reportPath"
+                  placeholder="outputs/run_A_B/report.json"
+                />
+              </div>
+            </div>
+            <div class="row actions">
+              <button id="btnRun" class="btn primary" type="submit">
+                Chạy so khớp
+              </button>
+              <button id="btnLoadReport" class="btn" type="button">
+                Mở report có sẵn
+              </button>
+              <div
+                id="runStatus"
+                class="status-pill subtle"
+                role="status"
+                aria-live="polite"
+              >
+                Sẵn sàng
+              </div>
+            </div>
+            <div id="progressWrap" class="progress hidden">
+              <div
+                class="progress-bar"
+                id="progressBar"
+                style="width: 0%"
+              ></div>
+              <div class="progress-text">
+                <span id="progressPct">0%</span> Đang so khớp...
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Kết quả -->
+      <section id="tab-results" class="tabpane">
         <div class="grid2">
-          <div><label>DOCX A</label><input type="file" id="fileA" accept=".docx" required/></div>
-          <div><label>DOCX B</label><input type="file" id="fileB" accept=".docx" required/></div>
-        </div>
-        <div class="grid2">
-          <div><label>Output dir</label><input type="text" id="outDir" value="outputs/webui_run"/></div>
-          <div><label>Report JSON có sẵn</label><input type="text" id="reportPath" placeholder="outputs/run_A_B/report.json"/></div>
-        </div>
-        <div class="row">
-          <button class="btn primary" type="submit">Bắt đầu</button>
-          <button id="btnLoadReport" class="btn" type="button">Mở JSON có sẵn</button>
-          <span id="runStatus" class="muted"></span>
-        </div>
-        <div id="progressWrap" class="progress hidden">
-          <div class="progress-bar" id="progressBar" style="width:0%"></div>
-          <div class="progress-text"><span id="progressPct">0%</span> Đang so khớp...</div>
-        </div>
-      </form>
-    </div>
-  </section>
-
-  <!-- Kết quả -->
-  <section id="tab-results" class="tabpane">
-    <div class="grid2">
-      <div class="card">
-        <h2>Tài liệu A (tổng quan)</h2>
-        <div class="grid2 gap16">
-          <div class="donut-card">
-            <canvas id="donutScore" width="150" height="150"></canvas>
-            <div class="donut-center">
-              <div id="pctText" class="pct">0%</div>
-              <div id="wordsText" class="muted small">0 từ trùng</div>
+          <div class="card">
+            <h2>Tài liệu A (tổng quan)</h2>
+            <div class="grid2 gap16">
+              <div class="donut-card">
+                <canvas id="donutScore" width="150" height="150"></canvas>
+                <div class="donut-center">
+                  <div id="pctText" class="pct">0%</div>
+                  <div id="wordsText" class="muted small">0 từ trùng</div>
+                </div>
+              </div>
+              <div>
+                <div class="stat line">
+                  <b>Pairs:</b> <span id="statPairs">0</span>
+                </div>
+                <div class="stat line">
+                  <b>Chunks A/B:</b> <span id="statChunksA">0</span>/<span
+                    id="statChunksB"
+                    >0</span
+                  >
+                </div>
+                <div class="stat line">
+                  <b>Độ phủ (ký tự):</b> <span id="coverText">0 / 0</span>
+                </div>
+                <div class="stat line">
+                  <b>Nguồn mạnh nhất:</b> <span id="topSource">—</span>
+                </div>
+              </div>
+            </div>
+            <div class="docbox" id="docAOverview">
+              <div class="muted">
+                Chọn một record ở bảng “Kết quả chi tiết” để xem highlight cụ
+                thể, hoặc kéo xuống.
+              </div>
             </div>
           </div>
-          <div>
-            <div class="stat line"><b>Pairs:</b> <span id="statPairs">0</span></div>
-            <div class="stat line"><b>Chunks A/B:</b> <span id="statChunksA">0</span>/<span id="statChunksB">0</span></div>
-            <div class="stat line"><b>Độ phủ (ký tự):</b> <span id="coverText">0 / 0</span></div>
-            <div class="stat line"><b>Nguồn mạnh nhất:</b> <span id="topSource">—</span></div>
+
+          <div class="card">
+            <h2>Nguồn đều khớp với</h2>
+            <div id="sourcesList" class="sources"></div>
           </div>
         </div>
-        <div class="docbox" id="docAOverview">
-          <div class="muted">Chọn một record ở bảng “Kết quả chi tiết” để xem highlight cụ thể, hoặc kéo xuống.</div>
+
+        <div class="card">
+          <h2>Các đoạn trùng lặp</h2>
+          <div class="filters">
+            <select id="filterLevel">
+              <option value="">Tất cả mức độ</option>
+              <option value="very_high">Rất cao</option>
+              <option value="high">Cao</option>
+              <option value="medium">Trung bình</option>
+              <option value="low">Thấp</option>
+            </select>
+            <input
+              type="text"
+              id="searchText"
+              placeholder="Tìm theo nội dung A hoặc B..."
+            />
+            <select id="sortBy">
+              <option value="score_desc">Ưu tiên độ trùng cao</option>
+              <option value="a_order">Theo thứ tự tài liệu A</option>
+            </select>
+            <button id="btnExportCSV" class="btn">Tải CSV</button>
+          </div>
+
+          <div class="results-list" id="resultsList"></div>
+          <div id="emptyResults" class="empty muted small">
+            Chưa có kết quả hiển thị — hãy chạy so khớp hoặc nới lỏng bộ lọc.
+          </div>
+
+          <div class="pager">
+            <button id="prevPage" class="btn">Prev</button>
+            <span id="pageInfo" class="muted"></span>
+            <button id="nextPage" class="btn">Next</button>
+            <select id="pageSize">
+              <option>10</option>
+              <option>20</option>
+              <option selected>50</option>
+              <option>100</option>
+            </select>
+          </div>
         </div>
-      </div>
 
-      <div class="card">
-        <h2>Nguồn đều khớp với</h2>
-        <div id="sourcesList" class="sources"></div>
-      </div>
-    </div>
+        <div class="card">
+          <h2>Chi tiết đoạn được chọn</h2>
+          <div class="row" style="justify-content: space-between">
+            <div class="row" style="gap: 8px">
+              <label
+                ><input type="checkbox" id="onlyMatches" /> Chỉ hiển thị phần
+                trùng</label
+              >
+            </div>
+            <div class="muted small">
+              Cuộn đồng bộ bật sẵn để so sánh trực tiếp.
+            </div>
+          </div>
+          <div class="grid2 syncwrap">
+            <div>
+              <h3>Tài liệu A</h3>
+              <div id="detailA" class="detail syncpane"></div>
+              <div id="snipsA" class="snips"></div>
+            </div>
+            <div>
+              <h3>Nguồn khớp</h3>
+              <div id="detailB" class="detail syncpane"></div>
+              <div id="snipsB" class="snips"></div>
+            </div>
+          </div>
 
-    <div class="card">
-      <h2>Kết quả chi tiết</h2>
-      <div class="filters">
-        <select id="filterLevel">
-          <option value="">Level: All</option><option value="very_high">very_high</option>
-          <option value="high">high</option><option value="medium">medium</option><option value="low">low</option>
-        </select>
-        <label>Cross ≥ <input type="number" id="minCross" step="0.01" min="0" max="1" value="0"></label>
-        <label>Bi ≥ <input type="number" id="minBi" step="0.01" min="0" max="1" value="0"></label>
-        <input type="text" id="searchText" placeholder="Tìm trong text A/B..."/>
-        <select id="sortBy">
-          <option value="score_desc">Score ↓</option><option value="cross_desc">Cross ↓</option>
-          <option value="bi_desc">Bi ↓</option><option value="lex_desc">Lex ↓</option>
-        </select>
-        <button id="btnExportCSV" class="btn">Export CSV</button>
-      </div>
-
-      <div class="table-wrap">
-        <table class="results">
-          <thead><tr><th>#</th><th>Score</th><th>Level</th><th>A[id]</th><th>B[id]</th><th>Preview</th></tr></thead>
-          <tbody id="resultsBody"></tbody>
-        </table>
-      </div>
-
-      <div class="pager">
-        <button id="prevPage" class="btn">Prev</button>
-        <span id="pageInfo" class="muted"></span>
-        <button id="nextPage" class="btn">Next</button>
-        <select id="pageSize"><option>20</option><option>50</option><option selected>100</option><option>200</option></select>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Chi tiết đoạn chọn</h2>
-      <div class="row" style="justify-content: space-between;">
-        <div class="row" style="gap:8px">
-          <label><input type="checkbox" id="onlyMatches"> Chỉ hiển thị phần trùng</label>
+          <h3 style="margin-top: 14px">Cụm trùng (A ↔ B)</h3>
+          <div class="matchgrid">
+            <div class="matchcol">
+              <div class="matchhead">A</div>
+              <div id="matchListA" class="matchlist"></div>
+            </div>
+            <div class="matchcol">
+              <div class="matchhead">B</div>
+              <div id="matchListB" class="matchlist"></div>
+            </div>
+          </div>
         </div>
-        <div class="muted small">Cuộn đồng bộ bật sẵn</div>
-      </div>
-      <div class="grid2 syncwrap">
-        <div>
-          <h3>A <span id="aid" class="muted"></span></h3>
-          <div id="detailA" class="detail syncpane"></div>
-          <div id="snipsA" class="snips"></div>
-        </div>
-        <div>
-          <h3>B <span id="bid" class="muted"></span></h3>
-          <div id="detailB" class="detail syncpane"></div>
-          <div id="snipsB" class="snips"></div>
-        </div>
-      </div>
+      </section>
 
-      <h3 style="margin-top:14px">Cụm trùng (A ↔ B)</h3>
-      <div class="matchgrid">
-        <div class="matchcol">
-          <div class="matchhead">A</div>
-          <div id="matchListA" class="matchlist"></div>
-        </div>
-        <div class="matchcol">
-          <div class="matchhead">B</div>
-          <div id="matchListB" class="matchlist"></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Settings -->
-  <section id="tab-settings" class="tabpane">
-    <div class="card">
-      <h2>Cấu hình YAML (override khi chạy)</h2>
-      <div class="grid2">
-        <div>
-          <h3>Weights</h3>
+      <!-- Settings -->
+      <section id="tab-settings" class="tabpane">
+        <div class="card">
+          <h2>Cấu hình YAML (override khi chạy)</h2>
           <div class="grid2">
-            <label>Cross <input type="number" id="w_cross" step="0.01" min="0" max="1" value="0.55"></label>
-            <label>Bi <input type="number" id="w_bi" step="0.01" min="0" max="1" value="0.25"></label>
-            <label>Lex <input type="number" id="w_lex" step="0.01" min="0" max="1" value="0.10"></label>
-            <label>BM25 <input type="number" id="w_bm25" step="0.01" min="0" max="1" value="0.10"></label>
+            <div>
+              <h3>Weights</h3>
+              <div class="grid2">
+                <label
+                  >Cross
+                  <input
+                    type="number"
+                    id="w_cross"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.55"
+                /></label>
+                <label
+                  >Bi
+                  <input
+                    type="number"
+                    id="w_bi"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.25"
+                /></label>
+                <label
+                  >Lex
+                  <input
+                    type="number"
+                    id="w_lex"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.10"
+                /></label>
+                <label
+                  >BM25
+                  <input
+                    type="number"
+                    id="w_bm25"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.10"
+                /></label>
+              </div>
+              <h3>Thresholds</h3>
+              <div class="grid3">
+                <label
+                  >very_high ≥
+                  <input
+                    type="number"
+                    id="th_vh"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.82"
+                /></label>
+                <label
+                  >high ≥
+                  <input
+                    type="number"
+                    id="th_h"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.72"
+                /></label>
+                <label
+                  >medium ≥
+                  <input
+                    type="number"
+                    id="th_m"
+                    step="0.01"
+                    min="0"
+                    max="1"
+                    value="0.60"
+                /></label>
+              </div>
+            </div>
+            <div>
+              <h3>Penalties</h3>
+              <div class="grid2">
+                <label
+                  >Lex boilerplate λ
+                  <input
+                    type="number"
+                    id="pen_lambda"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value="0.5"
+                /></label>
+                <label
+                  >Min span chars
+                  <input
+                    type="number"
+                    id="min_span"
+                    min="0"
+                    max="200"
+                    value="24"
+                /></label>
+                <label
+                  >Small span chars
+                  <input
+                    type="number"
+                    id="small_span"
+                    min="0"
+                    max="200"
+                    value="12"
+                /></label>
+                <label
+                  >Min small spans
+                  <input
+                    type="number"
+                    id="min_small"
+                    min="0"
+                    max="10"
+                    value="2"
+                /></label>
+              </div>
+              <h3>Retrieval</h3>
+              <div class="grid2">
+                <label
+                  >BM25 topK
+                  <input
+                    type="number"
+                    id="bm25_topk"
+                    min="1"
+                    max="2000"
+                    value="30"
+                /></label>
+                <label
+                  >ANN recall topK
+                  <input
+                    type="number"
+                    id="ann_topk"
+                    min="1"
+                    max="2000"
+                    value="50"
+                /></label>
+                <label
+                  >Re-rank topK
+                  <input
+                    type="number"
+                    id="rerank_topk"
+                    min="1"
+                    max="200"
+                    value="8"
+                /></label>
+                <label
+                  >SimHash topK
+                  <input
+                    type="number"
+                    id="simhash_topk"
+                    min="1"
+                    max="2000"
+                    value="40"
+                /></label>
+              </div>
+              <h3>Chunking</h3>
+              <div class="grid2">
+                <label
+                  >Size tokens
+                  <input
+                    type="number"
+                    id="size_tokens"
+                    min="50"
+                    max="512"
+                    value="160"
+                /></label>
+                <label
+                  >Overlap
+                  <input
+                    type="number"
+                    id="overlap"
+                    min="0"
+                    max="200"
+                    value="40"
+                /></label>
+                <label
+                  >Max len bi
+                  <input
+                    type="number"
+                    id="max_seq_bi"
+                    min="64"
+                    max="512"
+                    value="256"
+                /></label>
+                <label
+                  >Max len cross
+                  <input
+                    type="number"
+                    id="max_seq_cross"
+                    min="128"
+                    max="512"
+                    value="384"
+                /></label>
+              </div>
+            </div>
           </div>
-          <h3>Thresholds</h3>
-          <div class="grid3">
-            <label>very_high ≥ <input type="number" id="th_vh" step="0.01" min="0" max="1" value="0.82"></label>
-            <label>high ≥ <input type="number" id="th_h" step="0.01" min="0" max="1" value="0.72"></label>
-            <label>medium ≥ <input type="number" id="th_m" step="0.01" min="0" max="1" value="0.60"></label>
+          <div class="row">
+            <button id="btnLoadSettings" class="btn">Load từ YAML</button>
+            <button id="btnSaveSettings" class="btn primary">
+              Save (browser)
+            </button>
+            <span class="muted">Khi “Bắt đầu”, settings sẽ override YAML.</span>
           </div>
         </div>
-        <div>
-          <h3>Penalties</h3>
-          <div class="grid2">
-            <label>Lex boilerplate λ <input type="number" id="pen_lambda" step="0.05" min="0" max="1" value="0.5"></label>
-            <label>Min span chars <input type="number" id="min_span" min="0" max="200" value="24"></label>
-            <label>Small span chars <input type="number" id="small_span" min="0" max="200" value="12"></label>
-            <label>Min small spans <input type="number" id="min_small" min="0" max="10" value="2"></label>
-          </div>
-          <h3>Retrieval</h3>
-          <div class="grid2">
-            <label>BM25 topK <input type="number" id="bm25_topk" min="1" max="2000" value="30"></label>
-            <label>ANN recall topK <input type="number" id="ann_topk" min="1" max="2000" value="50"></label>
-            <label>Re-rank topK <input type="number" id="rerank_topk" min="1" max="200" value="8"></label>
-            <label>SimHash topK <input type="number" id="simhash_topk" min="1" max="2000" value="40"></label>
-          </div>
-          <h3>Chunking</h3>
-          <div class="grid2">
-            <label>Size tokens <input type="number" id="size_tokens" min="50" max="512" value="160"></label>
-            <label>Overlap <input type="number" id="overlap" min="0" max="200" value="40"></label>
-            <label>Max len bi <input type="number" id="max_seq_bi" min="64" max="512" value="256"></label>
-            <label>Max len cross <input type="number" id="max_seq_cross" min="128" max="512" value="384"></label>
-          </div>
-        </div>
-      </div>
-      <div class="row">
-        <button id="btnLoadSettings" class="btn">Load từ YAML</button>
-        <button id="btnSaveSettings" class="btn primary">Save (browser)</button>
-        <span class="muted">Khi “Bắt đầu”, settings sẽ override YAML.</span>
-      </div>
-    </div>
-  </section>
-</main>
+      </section>
+    </main>
 
-<footer class="foot muted">© plagio_vi — WebUI</footer>
-<script src="/assets/app.js"></script>
-</body>
+    <footer class="foot muted">© plagio_vi — WebUI</footer>
+    <script src="/assets/app.js"></script>
+  </body>
 </html>

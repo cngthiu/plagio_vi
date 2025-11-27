@@ -1,3 +1,18 @@
 Bài viết phân tích các chỉ tiêu kinh tế vĩ mô
 Phần tiếp theo thảo luận mô hình hồi quy
 Dữ liệu được thu thập từ nguồn công bố chính thức
+Lời mở đầu
+Lời nói đầu
+Mục lục
+Danh mục bảng
+Danh mục hình
+Lời cảm ơn
+Tài liệu tham khảo
+Phụ lục
+Kết luận và kiến nghị
+Danh mục chữ viết tắt
+DANH MỤC TỪ VIẾT TẮT
+Nguồn: .*?
+Trích dẫn từ .*?
+Tham khảo: .*?
+Theo báo cáo của .*?

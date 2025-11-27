@@ -25,17 +25,19 @@ class DocumentStruct:
         # Why: giảm false positive từ mục chuẩn.
         if not headers_to_ignore:
             return
-        lowered = [p.lower() for p in self.paragraphs]
+        lowered_headers = [h.lower() for h in headers_to_ignore]
         keep = []
-        for p in lowered:
-            if any(h.lower() in p for h in headers_to_ignore):
+        for para in self.paragraphs:
+            lp = para.lower()
+            if any(h in lp for h in lowered_headers):
                 continue
-            keep.append(p)
+            keep.append(para)
         self.paragraphs = keep
 
     def linearize(self):
         parts = []
         offset = 0
+        self.mapping_cells.clear()
         for p in self.paragraphs:
             parts.append(p)
             offset += len(p) + 1

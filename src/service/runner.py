@@ -2,7 +2,6 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-import re
 import json
 import numpy as np
 import yaml
@@ -21,6 +20,8 @@ from src.ranking.features import (
 )
 from src.alignment.tiling import greedy_string_tiling
 from src.alignment.sw_align import local_align_spans
+from src.preprocess.sentence_seg import split_sentences_with_offsets_vi
+from src.preprocess.chunker import chunk_sentences_window
 from src.utils.timing import Timer
 from src.utils.hardware import set_num_threads, select_device_config
 from src.utils.logging import JsonLogger
@@ -28,47 +29,8 @@ from src.utils.cache import DiskCache
 
 
 # ---------- helpers ----------
-TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
-
 def _html(s: str) -> str:
     return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-
-def _tokens_with_offsets(text: str) -> List[Tuple[str, int, int]]:
-    out = []
-    for m in TOKEN_RE.finditer(text):
-        out.append((m.group(0), m.start(), m.end()))
-    return out
-
-def _chunk_by_tokens(
-    text_display: str,
-    lowercase: bool,
-    size_tokens: int,
-    overlap: int
-) -> Tuple[List[str], List[str], List[Tuple[int,int]]]:
-    """
-    Trả về:
-      - chunks_align: dùng cho BM25/SimHash/align (lowercase)
-      - chunks_disp : hiển thị (gốc)
-      - spans_char  : (start,end) theo chuỗi gốc/display
-    """
-    disp = text_display
-    align = disp.lower() if lowercase else disp
-    toks = _tokens_with_offsets(align)
-    if not toks:
-        return [], [], []
-    step = max(1, size_tokens - overlap)
-    chunks_align, chunks_disp, spans_char = [], [], []
-    for i in range(0, len(toks), step):
-        sub = toks[i:i+size_tokens]
-        if not sub:
-            break
-        s = sub[0][1]; e = sub[-1][2]
-        spans_char.append((s, e))
-        chunks_align.append(align[s:e])
-        chunks_disp.append(disp[s:e])
-        if i + size_tokens >= len(toks):
-            break
-    return chunks_align, chunks_disp, spans_char
 
 def _minmax(a: np.ndarray) -> np.ndarray:
     if a.size == 0:
@@ -117,10 +79,13 @@ def _fuse_scores(
     S = w[0]*cross + w[1]*bi + w[2]*lex + w[3]*bm25n
     return np.clip(S, 0.0, 1.0).tolist()
 
-def _level(score: float) -> str:
-    if score >= 0.82: return "very_high"
-    if score >= 0.72: return "high"
-    if score >= 0.60: return "medium"
+def _level(score: float, thresholds: Dict[str, float]) -> str:
+    th_vh = thresholds.get("very_high", 0.82)
+    th_h = thresholds.get("high", 0.72)
+    th_m = thresholds.get("medium", 0.60)
+    if score >= th_vh: return "very_high"
+    if score >= th_h: return "high"
+    if score >= th_m: return "medium"
     return "low"
 
 def _load_yaml(path: str) -> Dict[str, Any]:
@@ -161,6 +126,31 @@ def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, 
     SMALL_SPAN = int(pen.get("small_span_chars", 12))
     MIN_SMALL = int(pen.get("min_small_spans", 2))
 
+    ranking_cfg = cfg.get("ranking_weights") or {}
+    legacy_ranking = cfg.get("ranking", {})
+    weights_map = {
+        "w_cross": float(legacy_ranking.get("alpha", 0.55)),
+        "w_bi": float(legacy_ranking.get("beta", 0.25)),
+        "w_lex": float(legacy_ranking.get("gamma", 0.10)),
+        "w_bm25": float(legacy_ranking.get("delta", 0.10)),
+    }
+    for key in ("w_cross", "w_bi", "w_lex", "w_bm25"):
+        if key in ranking_cfg and ranking_cfg[key] is not None:
+            weights_map[key] = float(ranking_cfg[key])
+    weights_tuple = (
+        weights_map["w_cross"],
+        weights_map["w_bi"],
+        weights_map["w_lex"],
+        weights_map["w_bm25"],
+    )
+
+    thresholds_cfg = cfg.get("decision_thresholds") or cfg.get("thresholds") or {}
+    thresholds = {
+        "very_high": float(thresholds_cfg.get("very_high", thresholds_cfg.get("high", 0.82))),
+        "high": float(thresholds_cfg.get("high", thresholds_cfg.get("medium", 0.72))),
+        "medium": float(thresholds_cfg.get("medium", thresholds_cfg.get("low", 0.60))),
+    }
+
     # --- Read & linearize ---
     with timer.section("read_docs"):
         docA = read_docx_with_tables(path_a, keep_tables=cfg["io"]["keep_tables"])
@@ -174,14 +164,27 @@ def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, 
 
     # --- Chunk ---
     with timer.section("chunking"):
-        chunksA_align, chunksA_disp, spansA_char = _chunk_by_tokens(
-            textA_disp, lowercase=True,
-            size_tokens=cfg["chunking"]["size_tokens"], overlap=cfg["chunking"]["overlap"]
+        sentsA = split_sentences_with_offsets_vi(textA_disp)
+        sentsB = split_sentences_with_offsets_vi(textB_disp)
+        _, chunksA_disp, spansA_char = chunk_sentences_window(
+            textA_disp, sentsA,
+            size_tokens=cfg["chunking"]["size_tokens"],
+            overlap_tokens=cfg["chunking"]["overlap"],
+            lowercase=cfg["preprocess"].get("lowercase", True)
         )
-        chunksB_align, chunksB_disp, spansB_char = _chunk_by_tokens(
-            textB_disp, lowercase=True,
-            size_tokens=cfg["chunking"]["size_tokens"], overlap=cfg["chunking"]["overlap"]
+        _, chunksB_disp, spansB_char = chunk_sentences_window(
+            textB_disp, sentsB,
+            size_tokens=cfg["chunking"]["size_tokens"],
+            overlap_tokens=cfg["chunking"]["overlap"],
+            lowercase=cfg["preprocess"].get("lowercase", True)
         )
+        # Dùng bản gốc làm hệ tọa độ; chỉ lower-case cho retrieval/lexical để giữ độ dài bằng nhau
+        if cfg["preprocess"].get("lowercase", True):
+            chunksA_align = [c.lower() for c in chunksA_disp]
+            chunksB_align = [c.lower() for c in chunksB_disp]
+        else:
+            chunksA_align = chunksA_disp[:]
+            chunksB_align = chunksB_disp[:]
 
     # --- BM25 / SimHash ---
     with timer.section("indexes"):
@@ -277,13 +280,15 @@ def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, 
             cross_map = {cand[order_by_bi[k]]: s_cross[k] for k in range(len(order_by_bi))}
             cross_full = [cross_map.get(j, 0.0) for j in cand]
 
-            S = _fuse_scores(cross_full, s_bi_list, s_lex_list, s_bm_list, w=(0.55,0.25,0.10,0.10))
+            S = _fuse_scores(cross_full, s_bi_list, s_lex_list, s_bm_list, w=weights_tuple)
             keep_ord = np.argsort(-np.asarray(S))[:5]
 
             for idx_in_keep in keep_ord:
                 j = cand[idx_in_keep]
                 a_text = chunksA_disp[i]; b_text = chunksB_disp[j]
-                a_align_text = chunksA_align[i]; b_align_text = chunksB_align[j]
+                # Sử dụng bản gốc (hoặc chỉ lower-case) để tính span, tránh lệch offset
+                a_align_text = chunksA_align[i]
+                b_align_text = chunksB_align[j]
 
                 spans_pairs = greedy_string_tiling(a_align_text, b_align_text)
                 if not spans_pairs:
@@ -301,7 +306,7 @@ def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, 
                     "a_chunk_id": i,
                     "b_chunk_id": j,
                     "score": float(S[idx_in_keep]),
-                    "level": _level(float(S[idx_in_keep])),
+                    "level": _level(float(S[idx_in_keep]), thresholds),
                     "scores": {
                         "cross": float(cross_full[idx_in_keep]),
                         "bi": float(s_bi_list[idx_in_keep]),
