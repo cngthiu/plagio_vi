@@ -94,7 +94,15 @@ def _load_yaml(path: str) -> Dict[str, Any]:
 
 
 # ---------- main ----------
-def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, out_dir: str) -> Dict[str, Any]:
+def run_compare(
+    config_path: str,
+    hardware_path: str,
+    path_a: str,
+    path_b: str,
+    out_dir: str,
+    bi_encoder: BiEncoder | None = None,
+    cross_encoder: CrossEncoder | None = None,
+) -> Dict[str, Any]:
     cfg = _load_yaml(config_path)
     hw = _load_yaml(hardware_path)
     faiss_cfg = _load_yaml(hw["index"]["faiss"]["cfg_path"])
@@ -193,13 +201,13 @@ def run_compare(config_path: str, hardware_path: str, path_a: str, path_b: str, 
 
     # --- Models ---
     with timer.section("models_load"):
-        bi = BiEncoder(
+        bi = bi_encoder or BiEncoder(
             device_cfg=device_cfg,
             max_seq_len=cfg["chunking"]["max_seq_len_bi"],
             backend=hw["inference"]["bi_encoder"]["backend"],
             quantize=hw["inference"]["bi_encoder"]["quantize"]
         )
-        ce = CrossEncoder(
+        ce = cross_encoder or CrossEncoder(
             device_cfg=device_cfg,
             max_seq_len=cfg["chunking"]["max_seq_len_cross"],
             backend=hw["inference"]["cross_encoder"]["backend"],
