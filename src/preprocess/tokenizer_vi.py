@@ -32,7 +32,3 @@ def vi_word_tokenize(text: str) -> List[str]:
         except Exception:
             pass
     return _TOKEN_FALLBACK.findall(text)
-
-# Backward compat
-def simple_tokenize(text: str) -> List[str]:
-    return vi_word_tokenize(text)

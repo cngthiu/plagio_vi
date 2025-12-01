@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import concurrent.futures
 import json
 import numpy as np
 import yaml
@@ -246,6 +247,13 @@ def run_compare(
     sim_topk    = cfg["simhash"]["topk"]
     rerank_topk = cfg["ann"]["topk_rerank"]
 
+    # gating thresholds to reduce CE workload
+    CE_MIN = float(cfg.get("gating", {}).get("ce_min_bi", 0.25))
+    CE_MAX = float(cfg.get("gating", {}).get("ce_max_bi", 0.92))
+    PREFILTER_BI = float(cfg.get("gating", {}).get("prefilter_bi", 0.30))
+    PREFILTER_LEX = float(cfg.get("gating", {}).get("prefilter_lex", 0.20))
+    ALIGN_WORKERS = int(cfg.get("parallel", {}).get("alignment_workers", 0))
+
     results: List[Dict[str, Any]] = []
 
     def _passes_span_rule(spans: List[Tuple[int,int]]) -> bool:
@@ -278,59 +286,102 @@ def run_compare(
                 s_bm  = bm25.score_of_cached(j)
                 s_bi_list.append(s_bi); s_lex_list.append(s_lex); s_bm_list.append(s_bm)
 
-            order_by_bi = np.argsort(-np.asarray(s_bi_list))[:rerank_topk]
-            pairs = [(a_disp, chunksB_disp[cand[ix]]) for ix in order_by_bi]
-            s_cross = ce.score_pairs(
-                pairs,
-                batch_size=(hw["inference"]["cross_encoder"].get("batch_size_gpu")
-                            or hw["inference"]["cross_encoder"].get("batch_size_cpu", 4))
-            )
-            cross_map = {cand[order_by_bi[k]]: s_cross[k] for k in range(len(order_by_bi))}
-            cross_full = [cross_map.get(j, 0.0) for j in cand]
+            # Prefilter before CE to shrink workload
+            filtered_idx = []
+            for idx_c, (sb, sl) in zip(cand, zip(s_bi_list, s_lex_list)):
+                if sb >= PREFILTER_BI or sl >= PREFILTER_LEX:
+                    filtered_idx.append(idx_c)
+            if not filtered_idx:
+                filtered_idx = cand[:3]  # keep a few to avoid missing everything
+
+            order_by_bi = np.argsort(-np.asarray([s_bi_list[cand.index(x)] for x in filtered_idx]))[:rerank_topk]
+            ce_inputs = [(a_disp, chunksB_disp[filtered_idx[ix]]) for ix in order_by_bi]
+
+            # Lazy CE: only run on uncertain region
+            ce_scores = {}
+            if ce_inputs:
+                # Filter out confident pairs
+                ce_mask = []
+                for idx_local, gidx in enumerate(order_by_bi):
+                    sb = s_bi_list[cand.index(filtered_idx[gidx])]
+                    if CE_MIN <= sb <= CE_MAX:
+                        ce_mask.append((idx_local, filtered_idx[gidx]))
+                if ce_mask:
+                    pairs = [ce_inputs[x[0]] for x in ce_mask]
+                    s_cross = ce.score_pairs(
+                        pairs,
+                        batch_size=(hw["inference"]["cross_encoder"].get("batch_size_gpu")
+                                    or hw["inference"]["cross_encoder"].get("batch_size_cpu", 4))
+                    )
+                    for (mask_idx, gidx), sc in zip(ce_mask, s_cross):
+                        ce_scores[gidx] = sc
+
+            cross_full = []
+            for j in cand:
+                if j in ce_scores:
+                    cross_full.append(ce_scores[j])
+                else:
+                    cross_full.append(0.0)
 
             S = _fuse_scores(cross_full, s_bi_list, s_lex_list, s_bm_list, w=weights_tuple)
             keep_ord = np.argsort(-np.asarray(S))[:5]
 
-            for idx_in_keep in keep_ord:
-                j = cand[idx_in_keep]
-                a_text = chunksA_disp[i]; b_text = chunksB_disp[j]
-                # Sử dụng bản gốc (hoặc chỉ lower-case) để tính span, tránh lệch offset
-                a_align_text = chunksA_align[i]
-                b_align_text = chunksB_align[j]
-
+            def _align_job(pair_idx: int):
+                j_local = cand[pair_idx]
+                a_text = chunksA_disp[i]; b_text = chunksB_disp[j_local]
+                a_align_text = chunksA_align[i]; b_align_text = chunksB_align[j_local]
                 spans_pairs = greedy_string_tiling(a_align_text, b_align_text)
                 if not spans_pairs:
                     spans_pairs = local_align_spans(a_align_text, b_align_text)
                 spans_pairs = _nms_spans(spans_pairs, iou_th=0.6)
-
                 spans_a = [(a0,a1) for (a0,a1,_,_) in spans_pairs]
                 spans_b = [(b0,b1) for (_,_,b0,b1) in spans_pairs]
+                return {
+                    "j": j_local,
+                    "spans_pairs": spans_pairs,
+                    "spans_a": spans_a,
+                    "spans_b": spans_b,
+                    "a_text": a_text,
+                    "b_text": b_text,
+                    "score": float(S[pair_idx]),
+                    "scores": {
+                        "cross": float(cross_full[pair_idx]),
+                        "bi": float(s_bi_list[pair_idx]),
+                        "lex": float(s_lex_list[pair_idx]),
+                        "bm25_raw": float(s_bm_list[pair_idx]),
+                    },
+                }
 
-                # enforce span rules both sides
-                if not _passes_span_rule(spans_a) or not _passes_span_rule(spans_b):
+            align_inputs = list(keep_ord)
+            align_results = []
+            if ALIGN_WORKERS > 1 and len(align_inputs) > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=ALIGN_WORKERS) as ex:
+                    for res in ex.map(_align_job, align_inputs):
+                        align_results.append(res)
+            else:
+                for idx_in_keep in align_inputs:
+                    align_results.append(_align_job(idx_in_keep))
+
+            for ar in align_results:
+                if not _passes_span_rule(ar["spans_a"]) or not _passes_span_rule(ar["spans_b"]):
                     continue
-
+                j = ar["j"]
                 rec = {
                     "a_chunk_id": i,
                     "b_chunk_id": j,
-                    "score": float(S[idx_in_keep]),
-                    "level": _level(float(S[idx_in_keep]), thresholds),
-                    "scores": {
-                        "cross": float(cross_full[idx_in_keep]),
-                        "bi": float(s_bi_list[idx_in_keep]),
-                        "lex": float(s_lex_list[idx_in_keep]),
-                        "bm25_raw": float(s_bm_list[idx_in_keep]),
-                    },
+                    "score": ar["score"],
+                    "level": _level(float(ar["score"]), thresholds),
+                    "scores": ar["scores"],
                     "a": {
-                        "text": a_text,
-                        "spans": spans_a,
-                        "snippets": _snippets(a_text, spans_a, ctx=40),
+                        "text": ar["a_text"],
+                        "spans": ar["spans_a"],
+                        "snippets": _snippets(ar["a_text"], ar["spans_a"], ctx=40),
                         "char_span_in_doc": [spansA_char[i][0], spansA_char[i][1]],
                     },
                     "b": {
-                        "text": b_text,
-                        "spans": spans_b,
-                        "snippets": _snippets(b_text, spans_b, ctx=40),
+                        "text": ar["b_text"],
+                        "spans": ar["spans_b"],
+                        "snippets": _snippets(ar["b_text"], ar["spans_b"], ctx=40),
                         "char_span_in_doc": [spansB_char[j][0], spansB_char[j][1]],
                     },
                 }

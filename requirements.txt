@@ -17,14 +17,12 @@ tokenizers==0.19.1
 sentencepiece==0.2.0
 pyvi==0.1.1           # ưu tiên tokenizer tiếng Việt (fallback underthesea nếu có)
 numba==0.60.0
+onnxruntime==1.18.1
 
 # Torch (CPU by default). For GPU install, see README to pick CUDA wheel.
 torch==2.3.1
 torchaudio==2.3.1
 torchvision==0.18.1
-
-# ONNX Runtime (CPU). GPU variant optional in README.
-onnxruntime==1.18.1
 
 # ANN / FAISS
 faiss-cpu==1.8.0
