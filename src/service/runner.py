@@ -8,7 +8,7 @@ import concurrent.futures
 import json
 import numpy as np
 
-# Imports từ hệ thống cũ
+# Imports giữ nguyên...
 from src.io.docx_reader import read_docx_with_tables
 from src.io.writer_report import write_json_report, write_html_report 
 from src.candidate.bm25_index import BM25Index
@@ -30,14 +30,12 @@ from src.utils.timing import Timer
 from src.utils.hardware import set_num_threads, select_device_config
 from src.utils.logging import JsonLogger
 from src.utils.cache import DiskCache
-
-# IMPORTS MỚI (Refactored)
 from src.utils.common import load_yaml
 from src.scoring.combine import fuse_scores, get_weights_from_cfg, level_of
 from src.report.highlight import make_snippets
 
-def _nms_spans(pairs: List[Tuple[int,int,int,int]], iou_th: float = 0.6) -> List[Tuple[int,int,int,int]]:
-    """Giữ lại NMS logic tại đây vì đặc thù format 4-tuple."""
+# [UPDATE] Đọc tham số từ config thay vì hardcode
+def _nms_spans(pairs: List[Tuple[int,int,int,int]], iou_th: float) -> List[Tuple[int,int,int,int]]:
     if not pairs:
         return []
     def iou_pair(a, b):
@@ -69,6 +67,13 @@ def run_compare(
     hw = load_yaml(hardware_path)
     faiss_cfg = load_yaml(hw["index"]["faiss"]["cfg_path"])
 
+    # [UPDATE] Load params từ config
+    ALIGN_GAP = cfg.get("alignment", {}).get("gap_merge", 5)
+    ALIGN_MIN_LEN = cfg.get("alignment", {}).get("min_len_local", 20)
+    IOU_TH = cfg.get("alignment", {}).get("iou_threshold", 0.6)
+    CTX_CHARS = cfg.get("report", {}).get("snippet_context_chars", 40)
+    ANN_BF_THRESH = cfg.get("ann", {}).get("force_brute_force_threshold", 5000)
+
     outp = Path(out_dir); outp.mkdir(parents=True, exist_ok=True)
     set_num_threads(hw["device"].get("omp_threads", 8), hw["device"].get("mkl_threads", 8))
     device_cfg = select_device_config(hw)
@@ -76,7 +81,7 @@ def run_compare(
     timer = Timer(logger=logger)
     cache = DiskCache(base_dir="outputs/cache")
 
-    # Load Boilerplate
+    # Load Boilerplate logic... (giữ nguyên)
     boiler_paths = []
     if cfg.get("domain_boilerplate", {}).get("enabled", False):
         boiler_paths = cfg["domain_boilerplate"].get("paths", [])
@@ -88,17 +93,14 @@ def run_compare(
                 if line: boiler_set.add(line.lower())
         except Exception: pass
     
-    # Load Weights & Thresholds
     weights_obj = get_weights_from_cfg(cfg)
-    thresholds_cfg = cfg.get("decision_thresholds") or cfg.get("thresholds") or {}
-    
     pen = cfg.get("penalties", {})
     LAMBDA = float(pen.get("lex_boilerplate_lambda", 0.5))
     MIN_SPAN = int(pen.get("min_span_chars", 24))
     SMALL_SPAN = int(pen.get("small_span_chars", 12))
     MIN_SMALL = int(pen.get("min_small_spans", 2))
 
-    # 2. Read Docs & Chunking
+    # 2. Read Docs & Chunking... (giữ nguyên)
     with timer.section("read_docs"):
         docA = read_docx_with_tables(path_a, keep_tables=cfg["io"]["keep_tables"])
         docB = read_docx_with_tables(path_b, keep_tables=cfg["io"]["keep_tables"])
@@ -157,7 +159,17 @@ def run_compare(
         if embB is None:
             embB = bi.encode(chunksB_disp, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
             cache.set_numpy("embeddings", kB, embB)
-        ann = ANNIndex(dim=None, cfg=faiss_cfg)
+        
+        # [UPDATE] Smart switching: Nếu Corpus B nhỏ -> Dùng Brute Force (FLAT)
+        if len(chunksB_disp) < ANN_BF_THRESH:
+            # Override config to force brute-force (bypass FAISS HNSW)
+            # ANNIndex fallbacks to brute-force if type != HNSW
+            local_ann_cfg = faiss_cfg.copy()
+            local_ann_cfg["type"] = "FLAT_BRUTE_FORCE"
+            ann = ANNIndex(dim=None, cfg=local_ann_cfg)
+        else:
+            ann = ANNIndex(dim=None, cfg=faiss_cfg)
+            
         ann.build(embB)
 
     with timer.section("embed_A"):
@@ -168,12 +180,12 @@ def run_compare(
             cache.set_numpy("embeddings", kA, embA)
         shA_vals = [simhash(c) for c in chunksA_align]
 
-    # 5. Matching & Reranking
+    # 5. Matching & Reranking...
     bm25_topk   = cfg["bm25"]["topk"]
     ann_topk    = cfg["ann"]["topk_recall"]
     sim_topk    = cfg["simhash"]["topk"]
     rerank_topk = cfg["ann"]["topk_rerank"]
-
+    # ... (giữ nguyên config gating/prefilter)
     CE_MIN = float(cfg.get("gating", {}).get("ce_min_bi", 0.25))
     CE_MAX = float(cfg.get("gating", {}).get("ce_max_bi", 0.92))
     PREFILTER_BI = float(cfg.get("gating", {}).get("prefilter_bi", 0.30))
@@ -189,12 +201,14 @@ def run_compare(
 
     with timer.section("match_rerank_align"):
         for i, (a_align, a_disp) in enumerate(zip(chunksA_align, chunksA_disp)):
+            # Search... (giữ nguyên)
             bm_idx  = bm25.search(a_align, topk=bm25_topk)
             sim_idx = shB.topk_by_hamming(shA_vals[i], k=sim_topk)
             ann_idx = ann.search(embA[i], topk=ann_topk)
             cand = sorted(set(bm_idx + sim_idx + ann_idx))[:max(bm25_topk, ann_topk, sim_topk)]
             if not cand: continue
 
+            # Scoring... (giữ nguyên)
             s_bi_list, s_lex_list, s_bm_list = [], [], []
             for j in cand:
                 b_align = chunksB_align[j]
@@ -207,7 +221,7 @@ def run_compare(
                 s_bm  = bm25.score_of_cached(j)
                 s_bi_list.append(s_bi); s_lex_list.append(s_lex); s_bm_list.append(s_bm)
 
-            # Prefilter
+            # Prefilter & Rerank... (giữ nguyên logic)
             filtered_idx = []
             for idx_c, (sb, sl) in zip(cand, zip(s_bi_list, s_lex_list)):
                 if sb >= PREFILTER_BI or sl >= PREFILTER_LEX:
@@ -217,7 +231,6 @@ def run_compare(
             order_by_bi = np.argsort(-np.asarray([s_bi_list[cand.index(x)] for x in filtered_idx]))[:rerank_topk]
             ce_inputs = [(a_disp, chunksB_disp[filtered_idx[ix]]) for ix in order_by_bi]
 
-            # Lazy CE
             ce_scores = {}
             if ce_inputs:
                 ce_mask = []
@@ -235,17 +248,19 @@ def run_compare(
             for j in cand:
                 cross_full.append(ce_scores.get(j, 0.0))
 
-            # FUSE SCORES (NEW)
+            # Fuse Scores
             S = fuse_scores(cross_full, s_bi_list, s_lex_list, s_bm_list, weights_obj)
             keep_ord = np.argsort(-np.asarray(S))[:5]
 
             def _align_job(pair_idx: int):
                 j_local = cand[pair_idx]
                 a_txt_a, b_txt_a = chunksA_align[i], chunksB_align[j_local]
-                spans_pairs = greedy_string_tiling(a_txt_a, b_txt_a)
+                # [UPDATE] Pass tham số từ config vào alignment
+                spans_pairs = greedy_string_tiling(a_txt_a, b_txt_a) # tiling có thể thêm min_len nếu cần
                 if not spans_pairs:
-                    spans_pairs = local_align_spans(a_txt_a, b_txt_a)
-                spans_pairs = _nms_spans(spans_pairs, iou_th=0.6)
+                    spans_pairs = local_align_spans(a_txt_a, b_txt_a, min_len=ALIGN_MIN_LEN, gap=ALIGN_GAP)
+                
+                spans_pairs = _nms_spans(spans_pairs, iou_th=IOU_TH)
                 spans_a = [(a0,a1) for (a0,a1,_,_) in spans_pairs]
                 spans_b = [(b0,b1) for (_,_,b0,b1) in spans_pairs]
                 return {
@@ -280,30 +295,30 @@ def run_compare(
                     "a_chunk_id": i,
                     "b_chunk_id": j,
                     "score": ar["score"],
-                    "level": level_of(float(ar["score"])), # NEW usage
+                    "level": level_of(float(ar["score"])),
                     "scores": ar["scores"],
                     "a": {
                         "text": chunksA_disp[i],
                         "spans": ar["spans_a"],
-                        "snippets": make_snippets(chunksA_disp[i], ar["spans_a"], ctx=40), # NEW usage
+                        # [UPDATE] Pass tham số ctx
+                        "snippets": make_snippets(chunksA_disp[i], ar["spans_a"], ctx=CTX_CHARS),
                         "char_span_in_doc": [spansA_char[i][0], spansA_char[i][1]],
                     },
                     "b": {
                         "text": chunksB_disp[j],
                         "spans": ar["spans_b"],
-                        "snippets": make_snippets(chunksB_disp[j], ar["spans_b"], ctx=40), # NEW usage
+                        "snippets": make_snippets(chunksB_disp[j], ar["spans_b"], ctx=CTX_CHARS),
                         "char_span_in_doc": [spansB_char[j][0], spansB_char[j][1]],
                     },
                 }
                 results.append(rec)
 
-    # 6. Summary & Export
+    # 6. Summary & Export... (giữ nguyên)
     with timer.section("aggregate"):
         levels = {"very_high":0,"high":0,"medium":0,"low":0}
         for r in results: levels[r["level"]] += 1
         summary = {"chunks_A": len(chunksA_disp), "chunks_B": len(chunksB_disp), "pairs": len(results), "levels": levels}
 
-    # NEW: Delegate reporting to modules
     write_json_report(outp / "report.json", docA, docB, results, {"summary": summary}, cfg, hw)
     write_html_report(outp / "report.html", docA, docB, results, {"summary": summary}, cfg, hw)
 

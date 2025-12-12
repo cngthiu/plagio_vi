@@ -33,6 +33,16 @@ chunking:
   max_seq_len_bi: 256
   max_seq_len_cross: 384
 
+# [UPDATE] Các tham số Alignment (trước đây hardcode)
+alignment:
+  gap_merge: 5           # Khoảng cách tối đa để gộp 2 span (sw_align)
+  min_len_local: 20      # Độ dài tối thiểu của span (sw_align)
+  iou_threshold: 0.6     # Ngưỡng NMS
+
+# [UPDATE] Các tham số Report
+report:
+  snippet_context_chars: 40 # Số ký tự ngữ cảnh trước/sau highlight
+
 bm25:
   k1: 1.2
   b: 0.75
@@ -46,23 +56,26 @@ simhash:
 ann:
   topk_recall: 50
   topk_rerank: 10
+  force_brute_force_threshold: 5000 # [UPDATE] Nếu số chunk < 5000, dùng brute-force
 
-ranking:
-  alpha: 0.55 # cross-encoder
-  beta: 0.25 # bi-encoder
-  gamma: 0.15 # lexical (n-gram/SimHash)
-  delta: 0.05 # bm25
+ranking_weights:
+  alpha: 0.55
+  beta: 0.25
+  gamma: 0.15
+  delta: 0.05
 
 thresholds:
   high: 0.82
   medium: 0.72
   low: 0.62
+
 domain_dicts:
   enabled: true
   paths:
     - "data/dictionaries/domain/it_terms.tsv"
     - "data/dictionaries/domain/economics_terms.tsv"
     - "data/dictionaries/domain/ee_terms.tsv"
+
 domain_boilerplate:
   enabled: true
   paths:
@@ -70,8 +83,9 @@ domain_boilerplate:
     - "data/patterns/boilerplate_economics.txt"
     - "data/patterns/boilerplate_ee.txt"
     - "data/patterns/boilerplate_law_vi.txt"
+
 penalties:
-  lex_boilerplate_lambda: 0.5   # 0..1, mức phạt áp vào điểm lex
-  min_span_chars: 24            # yêu cầu span tối thiểu cho 1 hit
-  min_small_spans: 2            # hoặc >=2 spans với chiều dài >= small_span_chars
+  lex_boilerplate_lambda: 0.5
+  min_span_chars: 24
+  min_small_spans: 2
   small_span_chars: 12
