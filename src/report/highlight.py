@@ -17,10 +17,7 @@ def _merge_spans(spans: List[Tuple[int,int]], gap: int = 5) -> List[Tuple[int,in
     return out
 
 def render_marked(text: str, spans: List[Tuple[int,int]]) -> str:
-    """
-    Tạo HTML chuỗi với <mark> bao quanh các đoạn [start,end) theo index ký tự.
-    Giả định spans thuộc trong [0, len(text)].
-    """
+    """Tạo HTML chuỗi với <mark> bao quanh các đoạn trùng lặp."""
     if not spans:
         from html import escape
         return f"<pre>{escape(text)}</pre>"
@@ -43,9 +40,22 @@ def render_marked(text: str, spans: List[Tuple[int,int]]) -> str:
     return "".join(html)
 
 def spans_from_pairs(pairs: List[Tuple[int,int,int,int]]) -> Dict[str, List[Tuple[int,int]]]:
-    """
-    Chuyển (a0,a1,b0,b1) -> hai danh sách spans riêng cho A và B.
-    """
+    """Chuyển (a0,a1,b0,b1) -> hai danh sách spans riêng cho A và B."""
     a_sp = [(a0, a1) for (a0,a1,_,_) in pairs]
     b_sp = [(b0, b1) for (_,_,b0,b1) in pairs]
     return {"a": a_sp, "b": b_sp}
+
+def make_snippets(orig: str, spans: List[Tuple[int,int]], ctx: int = 40) -> List[Dict[str, Any]]:
+    """Tạo danh sách snippet (trích đoạn) có ngữ cảnh 2 bên."""
+    snips = []
+    length = len(orig)
+    for s, e in spans:
+        s0 = max(0, s - ctx)
+        e0 = min(length, e + ctx)
+        snips.append({
+            "before": orig[s0:s],
+            "hit": orig[s:e],
+            "after": orig[e:e0],
+            "offset": [s, e]
+        })
+    return snips

@@ -1,7 +1,10 @@
+# =========================
 # file: src/scoring/combine.py
+# =========================
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass
+from src.utils.common import minmax_scale
 
 @dataclass
 class Weights:
@@ -10,7 +13,7 @@ class Weights:
     w_lex: float = 0.10
     w_bm25: float = 0.10
 
-# very_high/high/medium/low thresholds
+# Các ngưỡng đánh giá mức độ trùng lặp
 LEVELS = {
     "very_high": 0.82,
     "high": 0.72,
@@ -18,32 +21,40 @@ LEVELS = {
     "low": 0.0,
 }
 
-def _minmax(x: np.ndarray) -> np.ndarray:
-    if x.size == 0:
-        return x
-    mn, mx = float(np.min(x)), float(np.max(x))
-    if mx - mn < 1e-9:
-        return np.zeros_like(x, dtype=np.float32)
-    return ((x - mn) / (mx - mn)).astype(np.float32)
+def get_weights_from_cfg(cfg: dict) -> Weights:
+    """Trích xuất trọng số từ config dict."""
+    w = cfg.get("ranking_weights", {})
+    legacy = cfg.get("ranking", {})
+    return Weights(
+        w_cross=float(w.get("w_cross", legacy.get("alpha", 0.55))),
+        w_bi=float(w.get("w_bi", legacy.get("beta", 0.25))),
+        w_lex=float(w.get("w_lex", legacy.get("gamma", 0.10))),
+        w_bm25=float(w.get("w_bm25", legacy.get("delta", 0.10))),
+    )
 
-def fuse_scores(cross: np.ndarray, bi: np.ndarray, lex: np.ndarray, bm25: np.ndarray,
-                weights: Weights = Weights()) -> np.ndarray:
+def fuse_scores(cross: list | np.ndarray, bi: list | np.ndarray, 
+                lex: list | np.ndarray, bm25: list | np.ndarray, 
+                weights: Weights) -> list[float]:
     """
-    Trả điểm hợp nhất S ∈ [0,1].
-    - cross/bi/lex: đã ∈[0,1]
-    - bm25: chuẩn hoá min-max theo tập candidate
+    Tính điểm tổng hợp S từ các thành phần.
+    Trả về list[float] đã được clip trong đoạn [0, 1].
     """
-    bm25n = _minmax(bm25.astype(np.float32))
-    S = (weights.w_cross * cross.astype(np.float32) +
-         weights.w_bi    * bi.astype(np.float32) +
-         weights.w_lex   * lex.astype(np.float32) +
-         weights.w_bm25  * bm25n)
-    return np.clip(S, 0.0, 1.0)
+    c = np.array(cross, dtype=np.float32)
+    b = np.array(bi, dtype=np.float32)
+    l = np.array(lex, dtype=np.float32)
+    bm = minmax_scale(np.array(bm25, dtype=np.float32))
+
+    S = (weights.w_cross * c +
+         weights.w_bi    * b +
+         weights.w_lex   * l +
+         weights.w_bm25  * bm)
+    return np.clip(S, 0.0, 1.0).tolist()
 
 def level_of(score: float) -> str:
-    for name, th in (("very_high", LEVELS["very_high"]),
+    """Xác định mức độ trùng lặp dựa trên điểm số."""
+    for name, th in [("very_high", LEVELS["very_high"]),
                      ("high", LEVELS["high"]),
-                     ("medium", LEVELS["medium"])):
+                     ("medium", LEVELS["medium"])]:
         if score >= th:
             return name
     return "low"
