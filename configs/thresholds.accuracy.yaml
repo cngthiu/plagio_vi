@@ -1,15 +1,15 @@
 # configs/thresholds.accuracy.yaml
 ranking_weights:
-  alpha: 0.55
-  beta: 0.25
-  gamma: 0.15
-  delta: 0.05
+  alpha: 0.15
+  beta: 0.45
+  gamma: 0.10
+  delta: 0.30
 
 decision_thresholds:
-  very_high: 0.87
-  high: 0.82
-  medium: 0.72
-  low: 0.62
+  very_high: 0.85
+  high: 0.78
+  medium: 0.65
+  low: 0.55
 
 postprocess_rules:
   min_chars_span: 40
