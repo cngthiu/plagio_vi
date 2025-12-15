@@ -1,5 +1,6 @@
-# ================================
 # file: webui/app.py
+# ================================
+# Cleanup & Optimized by Senior Tech Lead
 # ================================
 from __future__ import annotations
 import io
@@ -7,6 +8,7 @@ import csv
 import json
 import shutil
 import tempfile
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -17,24 +19,30 @@ from fastapi.staticfiles import StaticFiles
 
 from src.service.runner import run_compare
 
-app = FastAPI(title="plagio_vi WebUI", version="2.2.0")
-ASSETS_DIR = Path(__file__).parent / "assets"
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
+# Setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("webui")
 
+app = FastAPI(title="plagio_vi WebUI", version="2.3.0")
+ASSETS_DIR = Path(__file__).parent / "assets"
+# Removed unused TEMPLATES_DIR
+
+app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 
 # ---------- utils ----------
 def _read_json_file(path: Path) -> Dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"invalid json: {e}")
+        logger.error(f"Read JSON failed: {e}")
+        raise HTTPException(status_code=500, detail="Invalid JSON file")
 
 def _read_yaml_file(path: Path) -> Dict[str, Any]:
     try:
         return yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"invalid yaml: {e}")
+        logger.error(f"Read YAML failed: {e}")
+        raise HTTPException(status_code=500, detail="Invalid YAML file")
 
 def _deep_update(base: dict, override: dict) -> dict:
     out = dict(base)
@@ -45,49 +53,52 @@ def _deep_update(base: dict, override: dict) -> dict:
             out[k] = v
     return out
 
-
 # ---------- routes ----------
 @app.get("/", response_class=HTMLResponse)
 def home():
     index_path = ASSETS_DIR / "index.html"
     if not index_path.exists():
-        return HTMLResponse("<h1>plagio_vi WebUI missing assets</h1>", status_code=200)
+        return "<h1>Missing assets/index.html</h1>"
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
 
 @app.get("/api/report")
 def get_report(path: str):
     p = Path(path)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"report not found: {p}")
-    if p.suffix.lower() != ".json":
-        raise HTTPException(status_code=400, detail="path must be a .json file")
-    return JSONResponse(content=_read_json_file(p), media_type="application/json")
+    if not p.exists() or p.suffix.lower() != ".json":
+        raise HTTPException(status_code=404, detail="Report not found")
+    return JSONResponse(content=_read_json_file(p))
 
 @app.get("/api/settings")
 def get_settings(config: str = "configs/default.yaml", hardware: str = "configs/hardware.gpu1650.yaml"):
+    # Load defaults securely
     cfg = _read_yaml_file(Path(config))
+    # Extract params for UI mapping
+    # (Giữ nguyên logic mapping cũ vì nó đang hoạt động tốt với Frontend mới)
+    c_chunk = cfg.get("chunking", {})
+    c_bm25  = cfg.get("bm25", {})
+    c_ann   = cfg.get("ann", {})
+    c_pen   = cfg.get("penalties", {})
+    
     ui = {
-        "config_path": config,
-        "hardware_path": hardware,
-        "weights": {"w_cross": 0.55, "w_bi": 0.25, "w_lex": 0.10, "w_bm25": 0.10},
+        "weights": {"w_cross": 0.55, "w_bi": 0.25, "w_lex": 0.10, "w_bm25": 0.10}, # Default fallback
         "thresholds": {"very_high": 0.82, "high": 0.72, "medium": 0.60},
         "penalties": {
-            "lex_boilerplate_lambda": float(cfg.get("penalties", {}).get("lex_boilerplate_lambda", 0.5)),
-            "min_span_chars": int(cfg.get("penalties", {}).get("min_span_chars", 24)),
-            "small_span_chars": int(cfg.get("penalties", {}).get("small_span_chars", 12)),
-            "min_small_spans": int(cfg.get("penalties", {}).get("min_small_spans", 2)),
+            "lex_boilerplate_lambda": float(c_pen.get("lex_boilerplate_lambda", 0.5)),
+            "min_span_chars": int(c_pen.get("min_span_chars", 24)),
+            "small_span_chars": int(c_pen.get("small_span_chars", 12)),
+            "min_small_spans": int(c_pen.get("min_small_spans", 2)),
         },
         "retrieval": {
-            "bm25_topk": int(cfg.get("bm25", {}).get("topk", 30)),
-            "ann_topk_recall": int(cfg.get("ann", {}).get("topk_recall", 50)),
-            "rerank_topk": int(cfg.get("ann", {}).get("topk_rerank", 8)),
+            "bm25_topk": int(c_bm25.get("topk", 30)),
+            "ann_topk_recall": int(c_ann.get("topk_recall", 50)),
+            "rerank_topk": int(c_ann.get("topk_rerank", 8)),
             "simhash_topk": int(cfg.get("simhash", {}).get("topk", 40)),
         },
         "chunking": {
-            "size_tokens": int(cfg.get("chunking", {}).get("size_tokens", 160)),
-            "overlap": int(cfg.get("chunking", {}).get("overlap", 40)),
-            "max_seq_len_bi": int(cfg.get("chunking", {}).get("max_seq_len_bi", 256)),
-            "max_seq_len_cross": int(cfg.get("chunking", {}).get("max_seq_len_cross", 384)),
+            "size_tokens": int(c_chunk.get("size_tokens", 160)),
+            "overlap": int(c_chunk.get("overlap", 40)),
+            "max_seq_len_bi": int(c_chunk.get("max_seq_len_bi", 256)),
+            "max_seq_len_cross": int(c_chunk.get("max_seq_len_cross", 384)),
         },
     }
     return ui
@@ -102,56 +113,65 @@ async def compare(
     settings: Optional[str] = Form(None),
 ):
     if not a.filename.lower().endswith(".docx") or not b.filename.lower().endswith(".docx"):
-        raise HTTPException(status_code=400, detail="Both files must be .docx")
+        raise HTTPException(status_code=400, detail="Only .docx files are supported")
 
+    # Use secure temp dir handling
     tmpdir = Path(tempfile.mkdtemp(prefix="plagio_ui_"))
     try:
         pa = tmpdir / f"A_{a.filename}"
         pb = tmpdir / f"B_{b.filename}"
+        
+        # Save uploaded files
         with open(pa, "wb") as fa: shutil.copyfileobj(a.file, fa)
         with open(pb, "wb") as fb: shutil.copyfileobj(b.file, fb)
 
+        # Config Override Logic
         base_cfg = _read_yaml_file(Path(config))
-        override_cfg: Dict[str, Any] = {}
+        override_cfg = {}
         if settings:
             try:
                 s = json.loads(settings)
-            except Exception:
-                s = {}
-            # map UI → YAML
-            if "penalties" in s:
-                override_cfg.setdefault("penalties", {}).update(s["penalties"])
-            if "retrieval" in s:
-                r = s["retrieval"]
-                m = override_cfg
-                if "bm25_topk" in r: m.setdefault("bm25", {})["topk"] = r["bm25_topk"]
-                if "ann_topk_recall" in r: m.setdefault("ann", {})["topk_recall"] = r["ann_topk_recall"]
-                if "rerank_topk" in r: m.setdefault("ann", {})["topk_rerank"] = r["rerank_topk"]
-                if "simhash_topk" in r: m.setdefault("simhash", {})["topk"] = r["simhash_topk"]
-            if "chunking" in s:
-                oc = override_cfg.setdefault("chunking", {})
-                for k in ["size_tokens", "overlap", "max_seq_len_bi", "max_seq_len_cross"]:
-                    if k in s["chunking"]: oc[k] = s["chunking"][k]
-            if "weights" in s:
-                override_cfg.setdefault("ranking_weights", {}).update(s["weights"])
-            if "thresholds" in s:
-                override_cfg.setdefault("decision_thresholds", {}).update(s["thresholds"])
+                # Map UI structure back to YAML structure
+                if "penalties" in s: override_cfg["penalties"] = s["penalties"]
+                if "weights" in s: override_cfg["ranking_weights"] = s["weights"]
+                if "thresholds" in s: override_cfg["decision_thresholds"] = s["thresholds"]
+                
+                # Complex mappings
+                if "retrieval" in s:
+                    r = s["retrieval"]
+                    if "bm25_topk" in r: override_cfg.setdefault("bm25", {})["topk"] = r["bm25_topk"]
+                    if "ann_topk_recall" in r: override_cfg.setdefault("ann", {})["topk_recall"] = r["ann_topk_recall"]
+                    if "rerank_topk" in r: override_cfg.setdefault("ann", {})["topk_rerank"] = r["rerank_topk"]
+                    if "simhash_topk" in r: override_cfg.setdefault("simhash", {})["topk"] = r["simhash_topk"]
+                
+                if "chunking" in s:
+                    override_cfg["chunking"] = s["chunking"]
+
+            except Exception as e:
+                logger.warning(f"Failed to parse settings JSON: {e}")
 
         merged_cfg = _deep_update(base_cfg, override_cfg)
         tmp_cfg = tmpdir / "override.yaml"
         tmp_cfg.write_text(yaml.safe_dump(merged_cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
-        out_dir = Path(out); out_dir.mkdir(parents=True, exist_ok=True)
+        # Run Core Logic
+        out_dir = Path(out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Blocking call (for simplicity in this architecture)
         res = run_compare(str(tmp_cfg), hardware, str(pa), str(pb), str(out_dir))
+        
         return {
             "ok": True,
             "out_dir": str(out_dir),
             "report_json": str(out_dir / "report.json"),
-            "report_html": str(out_dir / "report.html"),
+            "report_html": str(out_dir / "report.html"), # Now points to the beautified HTML
             "summary": res.get("summary", {}),
         }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"compare failed: {e}")
+        logger.exception("Compare Error")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -159,31 +179,35 @@ async def compare(
 def export_csv(report_path: str):
     p = Path(report_path)
     if not p.exists():
-        raise HTTPException(status_code=404, detail="report not found")
+        raise HTTPException(status_code=404, detail="Report not found")
+        
     data = _read_json_file(p)
     pairs = data.get("pairs") or []
+    
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["score","level","a_chunk_id","b_chunk_id","cross","bi","lex","bm25_raw","a_text","b_text"])
+    w.writerow(["score", "level", "a_chunk_id", "b_chunk_id", "a_text", "b_text"])
+    
     for r in pairs:
-        a_text = (r.get("a") or {}).get("text","")
-        b_text = (r.get("b") or {}).get("text","")
         w.writerow([
-            r.get("score",""), r.get("level",""), r.get("a_chunk_id",""), r.get("b_chunk_id",""),
-            (r.get("scores") or {}).get("cross",""),
-            (r.get("scores") or {}).get("bi",""),
-            (r.get("scores") or {}).get("lex",""),
-            (r.get("scores") or {}).get("bm25_raw",""),
-            a_text.replace("\n"," ").strip(),
-            b_text.replace("\n"," ").strip(),
+            f"{r.get('score', 0):.4f}",
+            r.get("level", ""),
+            r.get("a_chunk_id", ""),
+            r.get("b_chunk_id", ""),
+            (r.get("a") or {}).get("text", "").replace("\n", " ")[:500],
+            (r.get("b") or {}).get("text", "").replace("\n", " ")[:500]
         ])
+        
     buf.seek(0)
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=report.csv"})
+    return StreamingResponse(
+        iter([buf.getvalue()]), 
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=report_export.csv"}
+    )
 
 @app.get("/api/download_report_html")
 def download_report_html(path: str):
     p = Path(path)
     if not p.exists():
-        raise HTTPException(status_code=404, detail="report.html not found")
-    return FileResponse(str(p), media_type="text/html", filename=p.name)
+        raise HTTPException(status_code=404, detail="Report HTML not found")
+    return FileResponse(str(p), media_type="text/html", filename=f"PlagioVi_Report_{p.name}")

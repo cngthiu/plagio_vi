@@ -1,303 +1,313 @@
-let gReport=null, gReportPath=null, gPairsFiltered=[], gPage=1, gPageSize=50;
-let donut=null, progressTimer=null, progressVal=0;
-const $ = (id)=>document.getElementById(id);
-const esc = (s)=> (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// file: webui/assets/app.js
+let gReport = null;
+let gFilteredPairs = [];
+let distChart = null, donutChart = null;
+let currentPairIdx = -1;
 
-function setTab(name){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===name));
-  document.querySelectorAll('.tabpane').forEach(p=>p.classList.toggle('active', p.id===`tab-${name}`));
-}
-$('btnDark').onclick = ()=>{
-  const html=document.documentElement;
-  html.setAttribute('data-theme', html.getAttribute('data-theme')==='dark'?'light':'dark');
-};
+const $ = id => document.getElementById(id);
+const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Donut
-function renderDonut(percent){
-  percent = Math.max(0, Math.min(100, percent));
-  const ctx=$('donutScore').getContext('2d');
-  if(donut) donut.destroy();
-  donut = new Chart(ctx, {
-    type:'doughnut',
-    data:{ datasets:[{ data:[percent, 100-percent] }]},
-    options:{ cutout:'65%', plugins:{legend:{display:false}}, animation:{duration:400} }
-  });
-  $('pctText').innerText=`${percent.toFixed(0)}%`;
-}
-function unionIntervals(intervals){
-  if(!intervals.length) return [];
-  intervals.sort((a,b)=>a[0]-b[0]);
-  const out=[intervals[0].slice()];
-  for(const [s,e] of intervals.slice(1)){
-    const last=out[out.length-1];
-    if(s <= last[1]) last[1]=Math.max(last[1], e);
-    else out.push([s,e]);
-  }
-  return out;
-}
-function countWordsByChars(chars){ return Math.round(chars/5.5); }
-function buildDocMetrics(report){
-  let docLen = 0;
-  const globalSpansA=[];
-  for(const r of (report.pairs||[])){
-    const baseA = (r.a?.char_span_in_doc||[0,0])[0];
-    const spans = r.a?.spans || [];
-    for(const [s,e] of spans){
-      const g0=baseA + s, g1=baseA + e;
-      if(g1>g0) globalSpansA.push([g0,g1]);
-      if(r.a?.char_span_in_doc?.[1]>docLen) docLen = r.a.char_span_in_doc[1];
-    }
-  }
-  const merged = unionIntervals(globalSpansA);
-  const matchedChars = merged.reduce((acc,[s,e])=>acc+(e-s),0);
-  const percent = docLen>0 ? (matchedChars/docLen*100):0;
-  const matchedWords = countWordsByChars(matchedChars);
-  return { docLen, matchedChars, percent, matchedWords };
-}
-
-// rendering helpers
-function renderMarked(text, spans){
-  const t = text || '';
-  const marks = (spans||[]).slice().sort((a,b)=>a[0]-b[0]);
-  let cur = 0;
-  const buf = ['<pre>'];
-  for(const [s0,e0] of marks){
-    const s = Math.max(0, Math.min(t.length, s0));
-    const e = Math.max(0, Math.min(t.length, e0));
-    if(cur < s) buf.push(esc(t.slice(cur,s)));
-    buf.push('<mark>'+esc(t.slice(s,e))+'</mark>');
-    cur = Math.max(cur, e);
-  }
-  if(cur < t.length) buf.push(esc(t.slice(cur)));
-  buf.push('</pre>');
-  return buf.join('');
-}
-
-function renderSources(report){
-  const box=$('sourcesList'); box.innerHTML='';
-  const map=new Map();
-  for(const r of (report.pairs||[])){
-    const spans=r.b?.spans||[];
-    let chars=0; for(const [s,e] of spans) chars += Math.max(0, e-s);
-    const words = Math.max(1, countWordsByChars(chars));
-    const item = map.get(r.b_chunk_id) || {words:0, score:0, text:r.b?.text||'', id:r.b_chunk_id, hits:0};
-    item.words += words; item.score = Math.max(item.score, r.score||0); item.hits += spans.length;
-    map.set(r.b_chunk_id, item);
-  }
-  const arr=[...map.values()].sort((a,b)=> b.words-a.words).slice(0,8);
-  if(!arr.length){ box.innerHTML='<div class="muted">Chưa có nguồn đáng chú ý.</div>'; return; }
-  for(const s of arr){
-    const div=document.createElement('div'); div.className='source';
-    div.innerHTML=`
-      <div><b>B[${s.id}]</b> <span class="tag">~${s.words} từ trùng</span> <span class="tag">Max score ${s.score.toFixed(3)}</span></div>
-      <div class="preview">${esc(s.text.slice(0,240))}</div>`;
-    box.appendChild(div);
-  }
-  $('topSource').innerText = arr.length ? `B[${arr[0].id}] ~${arr[0].words} từ` : '—';
-}
-
-function renderOverview(report){
-  const met = buildDocMetrics(report);
-  $('statPairs').innerText = report.summary?.pairs ?? report.pairs.length ?? 0;
-  $('statChunksA').innerText = report.summary?.chunks_A ?? 0;
-  $('statChunksB').innerText = report.summary?.chunks_B ?? 0;
-  $('coverText').innerText = `${met.matchedChars} / ${met.docLen}`;
-  $('wordsText').innerText = `${met.matchedWords} từ trùng`;
-  renderDonut(met.percent);
-
-  const top = (report.pairs||[]).slice().sort((a,b)=> (b.score||0)-(a.score||0)).slice(0,5);
-  const box=$('docAOverview'); box.innerHTML='';
-  for(const r of top){
-    const card=document.createElement('div'); card.className='source';
-    card.innerHTML = `<div class="muted small">A[${r.a_chunk_id}] vs B[${r.b_chunk_id}] — score ${r.score?.toFixed(3)}</div>` +
-      renderMarked(r.a?.text||'', r.a?.spans||[]);
-    box.appendChild(card);
-  }
-  renderSources(report);
-}
-
-function renderResults(){
-  const list=$('resultsList'); list.innerHTML='';
-  const totalPages = Math.max(1, Math.ceil(Math.max(1, gPairsFiltered.length)/gPageSize));
-  gPage = Math.min(Math.max(1, gPage), totalPages);
-  const start=(gPage-1)*gPageSize, end=Math.min(start+gPageSize, gPairsFiltered.length);
-  $('pageInfo').innerText=gPairsFiltered.length ? `Trang ${gPage}/${totalPages}` : '';
-  if(!gPairsFiltered.length){ $('emptyResults').classList.remove('hidden'); return; }
-  $('emptyResults').classList.add('hidden');
-  for(let idx=start; idx<end; idx++){
-    const r=gPairsFiltered[idx];
-    const card=document.createElement('div'); card.className='result-card';
-    card.innerHTML=`
-      <div class="result-body">
-        <div class="result-section"><div class="result-label">A[${r.a_chunk_id}]</div>${renderMarked(r.a?.text||'', r.a?.spans||[])}</div>
-        <div class="result-section"><div class="result-label">B[${r.b_chunk_id}]</div>${renderMarked(r.b?.text||'', r.b?.spans||[])}</div>
-      </div>
-      <div class="result-snippet">Score ${r.score?.toFixed(3)} — ${r.level||''}</div>`;
-    card.onclick=()=>showDetail(r);
-    list.appendChild(card);
-  }
-}
-function applyFilters(){
-  if(!gReport || !Array.isArray(gReport.pairs)) { gPairsFiltered=[]; renderResults(); return; }
-  const level=$('filterLevel').value, q=$('searchText').value.trim().toLowerCase();
-  const sortBy=$('sortBy').value;
-  let pairs=gReport.pairs.slice();
-  if(level) pairs=pairs.filter(r=>r.level===level);
-  if(q){ pairs=pairs.filter(r=>(r.a?.text||'').toLowerCase().includes(q) || (r.b?.text||'').toLowerCase().includes(q)); }
-  if(sortBy==='a_order'){
-    pairs.sort((a,b)=> (a.a_chunk_id??0)-(b.a_chunk_id??0));
-  }else{
-    pairs.sort((a,b)=> (b.score??0)-(a.score??0));
-  }
-  gPairsFiltered=pairs; gPage=1; renderResults();
-}
-
-function showDetail(r){
-  $('detailA').innerHTML = $('onlyMatches').checked ? renderOnlyMatches(r.a?.text||'', r.a?.spans||[]) : renderMarked(r.a?.text||'', r.a?.spans||[]);
-  $('detailB').innerHTML = $('onlyMatches').checked ? renderOnlyMatches(r.b?.text||'', r.b?.spans||[]) : renderMarked(r.b?.text||'', r.b?.spans||[]);
-  $('snipsA').innerHTML = (r.a?.snippets||[]).slice(0,3).map(sn=>`<pre>...${esc(sn.before)}<mark>${esc(sn.hit)}</mark>${esc(sn.after)}...</pre>`).join('');
-  $('snipsB').innerHTML = (r.b?.snippets||[]).slice(0,3).map(sn=>`<pre>...${esc(sn.before)}<mark>${esc(sn.hit)}</mark>${esc(sn.after)}...</pre>`).join('');
-  const pairsA = r.a?.spans||[], pairsB = r.b?.spans||[];
-  const n = Math.min(pairsA.length, pairsB.length);
-  const listA = $('matchListA'); const listB = $('matchListB');
-  listA.innerHTML=''; listB.innerHTML='';
-  for(let i=0;i<n;i++){
-    const [sa,ea]=pairsA[i], [sb,eb]=pairsB[i];
-    const divA=document.createElement('div'); divA.className='matchitem'; divA.innerText = r.a.text.slice(sa,ea);
-    const divB=document.createElement('div'); divB.className='matchitem'; divB.innerText = r.b.text.slice(sb,eb);
-    listA.appendChild(divA); listB.appendChild(divB);
-  }
-}
-function renderOnlyMatches(text, spans){
-  if(!spans?.length) return `<pre>${esc(text||'')}</pre>`;
-  const buf = spans.slice().sort((a,b)=>a[0]-b[0]).map(([s,e]) => text.slice(Math.max(0,s), Math.max(0,Math.min(text.length,e))));
-  return `<pre>${buf.map(t=>`<mark>${esc(t)}</mark>`).join(' ... ')}</pre>`;
-}
-$('onlyMatches').addEventListener('change', ()=>{
-  if(gPairsFiltered.length){ showDetail(gPairsFiltered[0]); }
+// --- 1. Navigation & Init ---
+document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.tabpane').forEach(p => p.classList.remove('active'));
+        $(`tab-${btn.dataset.tab}`).classList.add('active');
+    });
 });
 
-async function loadReport(path){
-  const res = await fetch(`/api/report?path=${encodeURIComponent(path)}`);
-  if(!res.ok){ alert('Không mở được report.json'); return; }
-  let data = await res.json();
-  if(typeof data==='string'){ try{ data=JSON.parse(data); }catch{ alert('Report không hợp lệ'); return; } }
-  if(!data || !Array.isArray(data.pairs)){ alert('Report thiếu "pairs"'); return; }
-  gReport = data; gReportPath = path;
-  setTab('results');
-  renderOverview(gReport);
-  applyFilters();
-  $('btnOpenHtml').onclick=(e)=>{ e.preventDefault(); window.open(`/api/download_report_html?path=${encodeURIComponent(path.replace(/report\.json$/,'report.html'))}`,'_blank'); };
-}
+$('btnDark').onclick = () => {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    if (distChart) distChart.options.scales.x.grid.color = isDark ? '#e5e7eb' : '#334155'; // Trick to update chart theme
+};
 
-// progress
-function startProgress(){
-  $('progressWrap').classList.remove('hidden');
-  progressVal=0; $('progressBar').style.width='0%'; $('progressPct').innerText='0%';
-  clearInterval(progressTimer);
-  progressTimer = setInterval(()=>{
-    if(progressVal < 95){
-      progressVal += Math.max(0.2, (95-progressVal)*0.03);
-      $('progressBar').style.width=`${progressVal.toFixed(0)}%`;
-      $('progressPct').innerText=`${progressVal.toFixed(0)}%`;
+// --- 2. Charting & Visualization (The "Google" Part) ---
+function renderCharts(report) {
+    // A. Histogram: Score Distribution
+    const scores = report.pairs.map(p => p.score);
+    const bins = [0, 0, 0, 0, 0]; // <0.6, 0.6-0.7, 0.7-0.8, 0.8-0.9, >0.9
+    scores.forEach(s => {
+        if (s < 0.6) bins[0]++;
+        else if (s < 0.7) bins[1]++;
+        else if (s < 0.8) bins[2]++;
+        else if (s < 0.9) bins[3]++;
+        else bins[4]++;
+    });
+
+    const ctxDist = $('distChart').getContext('2d');
+    if (distChart) distChart.destroy();
+    distChart = new Chart(ctxDist, {
+        type: 'bar',
+        data: {
+            labels: ['< 60%', '60-70%', '70-80%', '80-90%', '> 90%'],
+            datasets: [{
+                label: 'Số lượng đoạn trùng',
+                data: bins,
+                backgroundColor: ['#e2e8f0', '#fef08a', '#fed7aa', '#fb7185', '#ef4444'],
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+
+    // B. Donut: Overall Similarity
+    // Tính tổng số ký tự trùng / tổng ký tự document A
+    let docLen = 0;
+    const coveredIntervals = [];
+    report.pairs.forEach(p => {
+        const docSpan = p.a.char_span_in_doc;
+        if (!docSpan) return;
+        docLen = Math.max(docLen, docSpan[1]);
+        // Merge các span con
+        p.a.spans.forEach(([s, e]) => {
+            coveredIntervals.push([docSpan[0] + s, docSpan[0] + e]);
+        });
+    });
+    
+    // Union intervals logic
+    coveredIntervals.sort((a, b) => a[0] - b[0]);
+    let merged = [];
+    if (coveredIntervals.length > 0) {
+        let [cs, ce] = coveredIntervals[0];
+        for (let i = 1; i < coveredIntervals.length; i++) {
+            let [ns, ne] = coveredIntervals[i];
+            if (ns <= ce) ce = Math.max(ce, ne);
+            else { merged.push([cs, ce]); cs = ns; ce = ne; }
+        }
+        merged.push([cs, ce]);
     }
-  }, 300);
-}
-function finishProgress(){
-  clearInterval(progressTimer);
-  progressVal=100;
-  $('progressBar').style.width='100%'; $('progressPct').innerText='100%';
-  setTimeout(()=> $('progressWrap').classList.add('hidden'), 800);
+    
+    const coveredChars = merged.reduce((acc, [s, e]) => acc + (e - s), 0);
+    const pct = docLen > 0 ? (coveredChars / docLen * 100) : 0;
+
+    // Update Metrics text
+    $('statPairs').innerText = report.pairs.length;
+    $('wordsText').innerText = `~${Math.round(coveredChars / 5)} từ`;
+    $('pctText').innerText = `${pct.toFixed(1)}%`;
+    $('coverText').innerText = `${coveredChars.toLocaleString()} / ${docLen.toLocaleString()} chars`;
+
+    const ctxDonut = $('donutScore').getContext('2d');
+    if (donutChart) donutChart.destroy();
+    donutChart = new Chart(ctxDonut, {
+        type: 'doughnut',
+        data: {
+            labels: ['Trùng', 'Sạch'],
+            datasets: [{
+                data: [pct, 100 - pct],
+                backgroundColor: ['#ef4444', '#e2e8f0'],
+                borderWidth: 0
+            }]
+        },
+        options: { cutout: '75%', plugins: { legend: { display: false } } }
+    });
+
+    // C. Document Heatmap (Minimap)
+    renderHeatmap(report.pairs, docLen);
 }
 
-function readSettingsUI(){
-  return {
-    weights: {
-      w_cross: parseFloat($('w_cross').value||'0.55'),
-      w_bi: parseFloat($('w_bi').value||'0.25'),
-      w_lex: parseFloat($('w_lex').value||'0.10'),
-      w_bm25: parseFloat($('w_bm25').value||'0.10'),
-    },
-    thresholds: {
-      very_high: parseFloat($('th_vh').value||'0.82'),
-      high: parseFloat($('th_h').value||'0.72'),
-      medium: parseFloat($('th_m').value||'0.60'),
-    },
-    penalties: {
-      lex_boilerplate_lambda: parseFloat($('pen_lambda').value||'0.5'),
-      min_span_chars: parseInt($('min_span').value||'24'),
-      small_span_chars: parseInt($('small_span').value||'12'),
-      min_small_spans: parseInt($('min_small').value||'2'),
-    },
-    retrieval: {
-      bm25_topk: parseInt($('bm25_topk').value||'30'),
-      ann_topk_recall: parseInt($('ann_topk').value||'50'),
-      rerank_topk: parseInt($('rerank_topk').value||'8'),
-      simhash_topk: parseInt($('simhash_topk').value||'40'),
-    },
-    chunking: {
-      size_tokens: parseInt($('size_tokens').value||'160'),
-      overlap: parseInt($('overlap').value||'40'),
-      max_seq_len_bi: parseInt($('max_seq_bi').value||'256'),
-      max_seq_len_cross: parseInt($('max_seq_cross').value||'384'),
+function renderHeatmap(pairs, docLen) {
+    const container = $('heatmapContainer');
+    container.innerHTML = '';
+    if (docLen === 0) return;
+
+    // Chỉ vẽ các đoạn High/Very High để đỡ rối
+    pairs.filter(p => p.score >= 0.72).forEach(p => {
+        const [start, end] = p.a.char_span_in_doc || [0, 0];
+        const leftPct = (start / docLen) * 100;
+        const widthPct = ((end - start) / docLen) * 100;
+        
+        const el = document.createElement('div');
+        el.className = 'heatmap-marker';
+        el.style.left = `${leftPct}%`;
+        el.style.width = `${Math.max(0.2, widthPct)}%`; // ít nhất 0.2% để nhìn thấy
+        el.title = `Score: ${p.score.toFixed(2)} (Click to view)`;
+        el.onclick = () => { jumpToPair(p); };
+        
+        // Color based on score
+        if (p.score >= 0.82) el.style.backgroundColor = 'var(--danger)';
+        else el.style.backgroundColor = 'var(--warning)';
+        
+        container.appendChild(el);
+    });
+}
+
+// --- 3. Rendering Detailed Report ---
+function renderMarkedText(text, spans, level) {
+    if (!text) return '';
+    // spans: [[start, end], ...] relative to text
+    // Sort spans
+    spans.sort((a, b) => a[0] - b[0]);
+    
+    let html = '';
+    let cur = 0;
+    const lvlClass = `lvl-${level || 'low'}`;
+    
+    spans.forEach(([s, e]) => {
+        s = Math.max(0, s); e = Math.min(text.length, e);
+        if (s > cur) html += esc(text.slice(cur, s));
+        html += `<mark class="${lvlClass}">${esc(text.slice(s, e))}</mark>`;
+        cur = e;
+    });
+    if (cur < text.length) html += esc(text.slice(cur));
+    return html;
+}
+
+function renderResultsList() {
+    const list = $('resultsList');
+    list.innerHTML = '';
+    
+    if (gFilteredPairs.length === 0) {
+        list.innerHTML = '<div class="muted" style="padding:20px; text-align:center">Không tìm thấy kết quả phù hợp bộ lọc.</div>';
+        return;
     }
-  };
-}
-function fillSettingsUI(obj){
-  if(!obj) return;
-  const w=obj.weights||{}, th=obj.thresholds||{}, p=obj.penalties||{}, r=obj.retrieval||{}, c=obj.chunking||{};
-  $('w_cross').value=w.w_cross??0.55; $('w_bi').value=w.w_bi??0.25; $('w_lex').value=w.w_lex??0.10; $('w_bm25').value=w.w_bm25??0.10;
-  $('th_vh').value=th.very_high??0.82; $('th_h').value=th.high??0.72; $('th_m').value=th.medium??0.60;
-  $('pen_lambda').value=p.lex_boilerplate_lambda??0.5; $('min_span').value=p.min_span_chars??24; $('small_span').value=p.small_span_chars??12; $('min_small').value=p.min_small_spans??2;
-  $('bm25_topk').value=r.bm25_topk??30; $('ann_topk').value=r.ann_topk_recall??50; $('rerank_topk').value=r.rerank_topk??8; $('simhash_topk').value=r.simhash_topk??40;
-  $('size_tokens').value=c.size_tokens??160; $('overlap').value=c.overlap??40; $('max_seq_bi').value=c.max_seq_len_bi??256; $('max_seq_cross').value=c.max_seq_len_cross??384;
-}
-$('btnLoadSettings').onclick = async ()=>{
-  const res = await fetch(`/api/settings`);
-  const data = await res.json();
-  const saved = JSON.parse(localStorage.getItem('plagio_settings')||'null');
-  fillSettingsUI(saved || data);
-};
-$('btnSaveSettings').onclick = ()=>{
-  localStorage.setItem('plagio_settings', JSON.stringify(readSettingsUI()));
-  alert('Đã lưu settings vào trình duyệt.');
-};
 
-async function runCompare(){
-  const aFile=$('fileA').files[0], bFile=$('fileB').files[0];
-  if(!aFile || !bFile){ alert('Chọn đủ 2 file DOCX'); return; }
-  $('runStatus').innerText='Đang chạy...'; startProgress();
-  const fd=new FormData();
-  fd.append('a', aFile); fd.append('b', bFile);
-  fd.append('out', $('outDir').value.trim() || 'outputs/webui_run');
-  const settings = localStorage.getItem('plagio_settings') || JSON.stringify(readSettingsUI());
-  fd.append('settings', settings);
-  try{
-    const res=await fetch('/api/compare', {method:'POST', body:fd});
-    const data=await res.json();
-    if(!res.ok || !data.ok) throw new Error(data.detail||'Compare failed');
-    $('runStatus').innerText='Hoàn tất ✓ — Loading report...';
-    $('reportPath').value=data.report_json;
-    await loadReport(data.report_json);
-    $('runStatus').innerText='Hoàn tất ✓'; finishProgress();
-  }catch(e){
-    console.error(e);
-    $('runStatus').innerText='Lỗi: '+e.message;
-    finishProgress();
-    alert('Lỗi so khớp: '+e.message);
-  }
+    gFilteredPairs.forEach((p, idx) => {
+        const div = document.createElement('div');
+        div.className = 'result-item';
+        div.innerHTML = `
+            <div>
+                <b>#${idx + 1}</b> 
+                <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${getColorForLevel(p.level)}; margin:0 8px;"></span>
+                <span>A[${p.a_chunk_id}] vs B[${p.b_chunk_id}]</span>
+            </div>
+            <div style="font-weight:bold; color:${getColorForLevel(p.level)}">${(p.score*100).toFixed(1)}%</div>
+        `;
+        div.onclick = () => selectPair(p, div);
+        list.appendChild(div);
+    });
 }
 
-// Events
-document.querySelectorAll('.tab').forEach(btn=> btn.addEventListener('click', ()=> setTab(btn.dataset.tab)));
-$('compare-form').addEventListener('submit', (e)=>{ e.preventDefault(); runCompare(); });
-$('btnLoadReport').onclick = ()=> {
-  const p=$('reportPath').value.trim(); if(!p){ alert('Nhập report.json'); return; } loadReport(p);
-};
-['filterLevel','searchText','sortBy'].forEach(id=> $(id).addEventListener('input', applyFilters));
-$('prevPage').onclick=()=>{ if(gPage>1){ gPage--; renderResults(); }};
-$('nextPage').onclick=()=>{ const max=Math.max(1, Math.ceil(gPairsFiltered.length/gPageSize)); if(gPage<max){ gPage++; renderResults(); }};
-$('pageSize').onchange=()=>{ gPageSize=parseInt($('pageSize').value||'50'); gPage=1; renderResults(); };
-$('btnExportCSV').onclick=()=>{ if(!gReportPath){ alert('Chưa mở report'); return; } window.open(`/api/export_csv?report_path=${encodeURIComponent(gReportPath)}`,'_blank'); };
+function getColorForLevel(level) {
+    switch(level) {
+        case 'very_high': return 'var(--danger)';
+        case 'high': return 'var(--warning)';
+        case 'medium': return '#eab308'; // darker yellow
+        default: return 'var(--text-muted)';
+    }
+}
 
-$('runStatus').innerText='Sẵn sàng';
+function selectPair(pair, el) {
+    // Highlight active item in list
+    document.querySelectorAll('.result-item').forEach(e => e.classList.remove('active'));
+    if (el) el.classList.add('active');
+
+    // Render comparison view
+    const showOnlyMatch = $('onlyMatches').checked;
+    
+    // Helper to get text
+    const getHTML = (side) => {
+        const text = pair[side].text;
+        const spans = pair[side].spans;
+        if (showOnlyMatch) {
+            // Chỉ hiện các đoạn snippets
+            return pair[side].snippets.map(s => 
+                `<div style="margin-bottom:10px; border-bottom:1px dashed #eee; padding-bottom:4px;">
+                   ...${esc(s.before)}<mark class="lvl-${pair.level}">${esc(s.hit)}</mark>${esc(s.after)}...
+                 </div>`
+            ).join('');
+        } else {
+            return `<pre>${renderMarkedText(text, spans, pair.level)}</pre>`;
+        }
+    };
+
+    $('detailA').innerHTML = getHTML('a');
+    $('detailB').innerHTML = getHTML('b');
+}
+
+function jumpToPair(pair) {
+    // Find index in filtered
+    // Đây là logic đơn giản, thực tế cần filter đúng context
+    selectPair(pair);
+    // Scroll to view logic here...
+}
+
+// --- 4. Logic Backend Interaction ---
+async function runCompare(e) {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.innerText = "⏳ Đang chạy...";
+    
+    const fd = new FormData();
+    fd.append('a', $('fileA').files[0]);
+    fd.append('b', $('fileB').files[0]);
+    fd.append('out', $('outDir').value);
+    
+    // Fake Progress (UX trick)
+    $('progressWrap').classList.remove('hidden');
+    let pct = 0;
+    const interval = setInterval(() => {
+        pct += Math.random() * 5;
+        if (pct > 90) pct = 90;
+        $('progressBar').style.width = pct + '%';
+        $('progressPct').innerText = Math.round(pct) + '%';
+    }, 500);
+
+    try {
+        const res = await fetch('/api/compare', { method: 'POST', body: fd });
+        const data = await res.json();
+        
+        clearInterval(interval);
+        $('progressBar').style.width = '100%';
+        $('progressPct').innerText = '100%';
+        
+        if (data.ok) {
+            loadReport(data.report_json);
+        } else {
+            alert('Lỗi: ' + data.detail);
+        }
+    } catch (err) {
+        alert('Có lỗi xảy ra: ' + err.message);
+    } finally {
+        btn.disabled = false; btn.innerText = "🚀 Chạy Kiểm Tra";
+    }
+}
+
+async function loadReport(path) {
+    try {
+        const res = await fetch(`/api/report?path=${encodeURIComponent(path)}`);
+        if(!res.ok){
+            const detail = await res.text();
+            alert(`Không tải được report (status ${res.status}): ${detail}`);
+            return;
+        }
+        gReport = await res.json();
+        
+        // Chuyển tab
+        document.querySelector('[data-tab="results"]').click();
+        
+        // Update Metadata
+        $('reportMeta').innerText = `Report: ${path.split('/').pop()} | Generated at: ${new Date().toLocaleTimeString()}`;
+        
+        // Init Data
+        gFilteredPairs = gReport.pairs.sort((a,b) => b.score - a.score);
+        
+        renderCharts(gReport);
+        renderResultsList();
+        if (gFilteredPairs.length > 0) selectPair(gFilteredPairs[0]);
+        
+    } catch (e) {
+        console.error(e);
+        alert('Không tải được report json');
+    }
+}
+
+// Init Events
+$('compare-form').onsubmit = runCompare;
+$('filterLevel').onchange = () => {
+    const val = $('filterLevel').value;
+    gFilteredPairs = (gReport?.pairs||[]).filter(p => !val || p.level === val);
+    renderResultsList();
+};
+$('onlyMatches').onchange = () => {
+    // Re-render current pair selection
+    const active = document.querySelector('.result-item.active');
+    if (active) active.click();
+};
