@@ -65,23 +65,26 @@ def write_html_report(path: Path, docA: DocumentStruct, docB: DocumentStruct,
     html.append(f"<h2>Summary</h2><pre>{_html_escape(json.dumps(stats['summary'], ensure_ascii=False, indent=2))}</pre>")
     html.append("<h2>Top matches</h2>")
     for r in sorted(results, key=lambda x: x["score"], reverse=True)[:200]:
-        a_text = r["a_text"]
-        b_text = r["b_text"]
-        spans_pairs = r["spans"]["pairs"]  # list of [a0,a1,b0,b1]
-        spans_map = spans_from_pairs([(p["a"][0],p["a"][1],p["b"][0],p["b"][1]) for p in spans_pairs])
+        # Support both legacy format (a_text/b_text) and new nested a/b
+        a_text = r.get("a_text") or (r.get("a") or {}).get("text", "")
+        b_text = r.get("b_text") or (r.get("b") or {}).get("text", "")
+        spans_a = r.get("spans", {}).get("a") if isinstance(r.get("spans"), dict) else None
+        spans_b = r.get("spans", {}).get("b") if isinstance(r.get("spans"), dict) else None
+        spans_a = spans_a or (r.get("a") or {}).get("spans", [])
+        spans_b = spans_b or (r.get("b") or {}).get("spans", [])
         html.append('<div class="pair">')
-        html.append(f'<div class="score">Score: {r["score"]:.3f} — cross={r["scores"]["cross"]:.3f} bi={r["scores"]["bi"]:.3f} lex={r["scores"]["lex"]:.3f}</div>')
+        html.append(f'<div class="score">Score: {r["score"]:.3f} — cross={r["scores"].get("cross",0):.3f} bi={r["scores"].get("bi",0):.3f} lex={r["scores"].get("lex",0):.3f}</div>')
         html.append('<div class="two">')
-        html.append(f'<div><h4>A[{r["a_chunk_id"]}]</h4>{render_marked(a_text, spans_map["a"])}</div>')
-        html.append(f'<div><h4>B[{r["b_chunk_id"]}]</h4>{render_marked(b_text, spans_map["b"])}</div>')
+        html.append(f'<div><h4>A[{r.get("a_chunk_id","?")}]</h4>{render_marked(a_text, spans_a)}</div>')
+        html.append(f'<div><h4>B[{r.get("b_chunk_id","?")}]</h4>{render_marked(b_text, spans_b)}</div>')
         html.append("</div>")  # .two
         # Cells guess
-        matched_in_b = _extract_matched_substrings(b_text, spans_map["b"])
+        matched_in_b = _extract_matched_substrings(b_text, spans_b)
         cell_hits = _guess_cells_for_matches(docB, matched_in_b)
         if cell_hits:
             tags = " ".join([f'<span class="badge">table {t}, r{r0}, c{c0}</span>' for (t, r0, c0) in cell_hits])
             html.append(f'<div class="cells">Cells (B): {tags}</div>')
-        html.append(f'<div class="meta">{_html_escape(json.dumps(r["spans"], ensure_ascii=False))}</div>')
+        html.append(f'<div class="meta">{_html_escape(json.dumps(r.get("spans", {}), ensure_ascii=False))}</div>')
         html.append("</div>")
     html.append("</body></html>")
     path.write_text("\n".join(html), encoding="utf-8")
