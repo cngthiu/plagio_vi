@@ -1,8 +1,9 @@
 # =========================
 # file: src/ranking/features.py
 # =========================
+import re
 import numpy as np
-from typing import Iterable, Set
+from typing import Iterable, List, Set
 
 def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
@@ -34,3 +35,24 @@ def boilerplate_penalty(text_a: str, text_b: str, boiler: Set[str]) -> float:
     if total <= 0:
         return 0.0
     return min(1.0, len(both) / total)
+
+def stopphrase_penalty(text_a: str, text_b: str, stop_phrases: Set[str]) -> float:
+    if not stop_phrases:
+        return 0.0
+    a_hits = {p for p in stop_phrases if p in text_a}
+    b_hits = {p for p in stop_phrases if p in text_b}
+    both = a_hits & b_hits
+    total = len(a_hits) + len(b_hits) - len(both)
+    if total <= 0:
+        return 0.0
+    return min(1.0, len(both) / total)
+
+def citation_penalty(text_a: str, text_b: str, patterns: List[str]) -> float:
+    if not patterns:
+        return 0.0
+    regs = [re.compile(p) for p in patterns]
+    a_hits = sum(1 for r in regs if r.search(text_a))
+    b_hits = sum(1 for r in regs if r.search(text_b))
+    if a_hits == 0 or b_hits == 0:
+        return 0.0
+    return min(1.0, min(a_hits, b_hits) / max(a_hits, b_hits))

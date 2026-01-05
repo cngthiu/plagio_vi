@@ -21,10 +21,14 @@ from src.ranking.features import (
     jaccard_char_ngrams,
     hamming_similarity,
     boilerplate_penalty,
+    stopphrase_penalty,
+    citation_penalty,
 )
 from src.alignment.tiling import greedy_string_tiling
 from src.preprocess.sentence_seg import split_sentences_with_offsets_vi
-from src.preprocess.chunker import chunk_sentences_window
+from src.preprocess.chunker import chunk_sentences_window, chunk_text_by_paragraphs
+from src.preprocess.normalize_vi import normalize_for_alignment, normalize_for_retrieval
+from src.dicts.loader import load_dictionaries
 from src.utils.timing import Timer
 from src.utils.hardware import set_num_threads, select_device_config
 from src.utils.logging import JsonLogger
@@ -52,6 +56,24 @@ def _nms_spans(pairs: List[Tuple[int,int,int,int]], iou_th: float) -> List[Tuple
             out.append(sp)
     return out
 
+def _span_coverage(spans: List[Tuple[int, int]], text_len: int) -> float:
+    if not spans or text_len <= 0:
+        return 0.0
+    covered = sum(max(0, e - s) for s, e in spans)
+    return min(1.0, covered / text_len)
+
+def _sentence_offsets_in_text(text: str, sentences: List[str]) -> List[Tuple[int, int]]:
+    offsets = []
+    cur = 0
+    for s in sentences:
+        start = text.find(s, cur)
+        if start == -1:
+            start = cur
+        end = start + len(s)
+        offsets.append((start, end))
+        cur = end
+    return offsets
+
 def run_compare(
     config_path: str,
     hardware_path: str,
@@ -65,11 +87,16 @@ def run_compare(
     cfg = load_yaml(config_path)
     hw = load_yaml(hardware_path)
     faiss_cfg = load_yaml(hw["index"]["faiss"]["cfg_path"])
+    dicts = load_dictionaries(cfg.get("dictionary_paths", {}))
 
     # [UPDATE] Load params từ config
     ALIGN_GAP = cfg.get("alignment", {}).get("gap_merge", 5)
     ALIGN_MIN_LEN = cfg.get("alignment", {}).get("min_len_local", 20)
     IOU_TH = cfg.get("alignment", {}).get("iou_threshold", 0.6)
+    SEM_ALIGN = cfg.get("alignment", {}).get("semantic_enabled", True)
+    SEM_TH = float(cfg.get("alignment", {}).get("semantic_threshold", 0.78))
+    SEM_MAX = int(cfg.get("alignment", {}).get("semantic_topk", 3))
+    SEM_MIN_COV = float(cfg.get("alignment", {}).get("semantic_min_coverage", 0.15))
     CTX_CHARS = cfg.get("report", {}).get("snippet_context_chars", 40)
     ANN_BF_THRESH = cfg.get("ann", {}).get("force_brute_force_threshold", 5000)
 
@@ -85,16 +112,28 @@ def run_compare(
     if cfg.get("domain_boilerplate", {}).get("enabled", False):
         boiler_paths = cfg["domain_boilerplate"].get("paths", [])
     boiler_set = set()
+    boiler_set.update(getattr(dicts, "boilerplate", set()))
     for p in boiler_paths:
         try:
             for line in open(p, encoding="utf-8"):
                 line = line.strip()
                 if line: boiler_set.add(line.lower())
         except Exception: pass
+
+    section_headers = []
+    section_headers_path = cfg.get("dictionary_paths", {}).get("section_headers", "")
+    if section_headers_path:
+        try:
+            with open(section_headers_path, encoding="utf-8") as f:
+                section_headers = [l.strip() for l in f if l.strip()]
+        except Exception:
+            section_headers = []
     
     weights_obj = get_weights_from_cfg(cfg)
     pen = cfg.get("penalties", {})
     LAMBDA = float(pen.get("lex_boilerplate_lambda", 0.5))
+    STOP_LAMBDA = float(pen.get("stopphrase_lambda", 0.2))
+    CIT_LAMBDA = float(pen.get("citation_lambda", 0.15))
     MIN_SPAN = int(pen.get("min_span_chars", 24))
     SMALL_SPAN = int(pen.get("small_span_chars", 12))
     MIN_SMALL = int(pen.get("min_small_spans", 2))
@@ -111,31 +150,93 @@ def run_compare(
         textB_disp = docB.linearized_text
 
     with timer.section("chunking"):
-        sentsA = split_sentences_with_offsets_vi(textA_disp)
-        sentsB = split_sentences_with_offsets_vi(textB_disp)
-        _, chunksA_disp, spansA_char = chunk_sentences_window(
-            textA_disp, sentsA,
-            size_tokens=cfg["chunking"]["size_tokens"],
-            overlap_tokens=cfg["chunking"]["overlap"],
-            lowercase=cfg["preprocess"].get("lowercase", True)
-        )
-        _, chunksB_disp, spansB_char = chunk_sentences_window(
-            textB_disp, sentsB,
-            size_tokens=cfg["chunking"]["size_tokens"],
-            overlap_tokens=cfg["chunking"]["overlap"],
-            lowercase=cfg["preprocess"].get("lowercase", True)
-        )
-        if cfg["preprocess"].get("lowercase", True):
-            chunksA_align = [c.lower() for c in chunksA_disp]
-            chunksB_align = [c.lower() for c in chunksB_disp]
+        chunk_mode = cfg.get("chunking", {}).get("mode", "sentence")
+        if chunk_mode == "paragraph":
+            _, chunksA_disp, spansA_char = chunk_text_by_paragraphs(
+                textA_disp,
+                size_tokens=cfg["chunking"]["size_tokens"],
+                overlap_tokens=cfg["chunking"]["overlap"],
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                heading_lines=section_headers,
+            )
+            _, chunksB_disp, spansB_char = chunk_text_by_paragraphs(
+                textB_disp,
+                size_tokens=cfg["chunking"]["size_tokens"],
+                overlap_tokens=cfg["chunking"]["overlap"],
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                heading_lines=section_headers,
+            )
         else:
-            chunksA_align = chunksA_disp[:]
-            chunksB_align = chunksB_disp[:]
+            sentsA = split_sentences_with_offsets_vi(textA_disp)
+            sentsB = split_sentences_with_offsets_vi(textB_disp)
+            _, chunksA_disp, spansA_char = chunk_sentences_window(
+                textA_disp, sentsA,
+                size_tokens=cfg["chunking"]["size_tokens"],
+                overlap_tokens=cfg["chunking"]["overlap"],
+                lowercase=cfg["preprocess"].get("lowercase", True)
+            )
+            _, chunksB_disp, spansB_char = chunk_sentences_window(
+                textB_disp, sentsB,
+                size_tokens=cfg["chunking"]["size_tokens"],
+                overlap_tokens=cfg["chunking"]["overlap"],
+                lowercase=cfg["preprocess"].get("lowercase", True)
+            )
+
+        chunksA_align = [
+            normalize_for_alignment(
+                c,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                mask_numbers=cfg["preprocess"].get("mask_numbers", True),
+                strip_zero_width=cfg["preprocess"].get("strip_zero_width", True),
+            )
+            for c in chunksA_disp
+        ]
+        chunksB_align = [
+            normalize_for_alignment(
+                c,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                mask_numbers=cfg["preprocess"].get("mask_numbers", True),
+                strip_zero_width=cfg["preprocess"].get("strip_zero_width", True),
+            )
+            for c in chunksB_disp
+        ]
+        chunksA_retr = [
+            normalize_for_retrieval(
+                c,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                unicode_norm=cfg["preprocess"].get("unicode_normalize", "NFC"),
+                expand_abbrev=cfg["preprocess"].get("abbreviations_expand", True),
+                apply_synonyms=cfg["preprocess"].get("synonyms_expand", True),
+                remove_stop_phrases=cfg["preprocess"].get("remove_stop_phrases", True),
+                remove_boilerplate=cfg["preprocess"].get("remove_boilerplate", True),
+                abbreviations=getattr(dicts, "abbreviations", {}),
+                synonyms=getattr(dicts, "synonyms", {}),
+                stop_phrases=getattr(dicts, "stop_phrases", set()),
+                boilerplate=boiler_set,
+            )
+            for c in chunksA_disp
+        ]
+        chunksB_retr = [
+            normalize_for_retrieval(
+                c,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                unicode_norm=cfg["preprocess"].get("unicode_normalize", "NFC"),
+                expand_abbrev=cfg["preprocess"].get("abbreviations_expand", True),
+                apply_synonyms=cfg["preprocess"].get("synonyms_expand", True),
+                remove_stop_phrases=cfg["preprocess"].get("remove_stop_phrases", True),
+                remove_boilerplate=cfg["preprocess"].get("remove_boilerplate", True),
+                abbreviations=getattr(dicts, "abbreviations", {}),
+                synonyms=getattr(dicts, "synonyms", {}),
+                stop_phrases=getattr(dicts, "stop_phrases", set()),
+                boilerplate=boiler_set,
+            )
+            for c in chunksB_disp
+        ]
 
     # 3. Retrieval Indexes
     with timer.section("indexes"):
-        bm25 = BM25Index(chunksB_align)
-        shB  = SimHashIndex([simhash(c) for c in chunksB_align])
+        bm25 = BM25Index(chunksB_retr)
+        shB  = SimHashIndex([simhash(c) for c in chunksB_retr])
 
     # 4. Load Models & Embedding
     with timer.section("models_load"):
@@ -153,10 +254,10 @@ def run_compare(
         )
 
     with timer.section("embed_B"):
-        kB = cache.key_for_texts(chunksB_disp, getattr(bi, "model_name", "bi"))
+        kB = cache.key_for_texts(chunksB_retr, getattr(bi, "model_name", "bi"))
         embB = cache.get_numpy("embeddings", kB)
         if embB is None:
-            embB = bi.encode(chunksB_disp, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
+            embB = bi.encode(chunksB_retr, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
             cache.set_numpy("embeddings", kB, embB)
         
         # [UPDATE] Smart switching: Nếu Corpus B nhỏ -> Dùng Brute Force (FLAT)
@@ -172,12 +273,12 @@ def run_compare(
         ann.build(embB)
 
     with timer.section("embed_A"):
-        kA = cache.key_for_texts(chunksA_disp, getattr(bi, "model_name", "bi"))
+        kA = cache.key_for_texts(chunksA_retr, getattr(bi, "model_name", "bi"))
         embA = cache.get_numpy("embeddings", kA)
         if embA is None:
-            embA = bi.encode(chunksA_disp, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
+            embA = bi.encode(chunksA_retr, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
             cache.set_numpy("embeddings", kA, embA)
-        shA_vals = [simhash(c) for c in chunksA_align]
+        shA_vals = [simhash(c) for c in chunksA_retr]
 
     # 5. Matching & Reranking...
     bm25_topk   = cfg["bm25"]["topk"]
@@ -192,16 +293,69 @@ def run_compare(
     ALIGN_WORKERS = int(cfg.get("parallel", {}).get("alignment_workers", 0))
 
     results: List[Dict[str, Any]] = []
+    citation_patterns = cfg.get("penalties", {}).get("citation_patterns", [])
+    stop_phrases = getattr(dicts, "stop_phrases", set())
 
     def _passes_span_rule(spans: List[Tuple[int,int]]) -> bool:
         if not spans: return False
         if any((e - s) >= MIN_SPAN for s, e in spans): return True
         return sum(1 for s, e in spans if (e - s) >= SMALL_SPAN) >= MIN_SMALL
 
+    def _semantic_span_pairs(a_text: str, b_text: str) -> List[Tuple[int,int,int,int]]:
+        sentsA = split_sentences_with_offsets_vi(a_text)
+        sentsB = split_sentences_with_offsets_vi(b_text)
+        if not sentsA or not sentsB:
+            return []
+        offsA = _sentence_offsets_in_text(a_text, sentsA)
+        offsB = _sentence_offsets_in_text(b_text, sentsB)
+        normA = [
+            normalize_for_retrieval(
+                s,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                unicode_norm=cfg["preprocess"].get("unicode_normalize", "NFC"),
+                expand_abbrev=cfg["preprocess"].get("abbreviations_expand", True),
+                apply_synonyms=cfg["preprocess"].get("synonyms_expand", True),
+                remove_stop_phrases=False,
+                remove_boilerplate=False,
+                abbreviations=getattr(dicts, "abbreviations", {}),
+                synonyms=getattr(dicts, "synonyms", {}),
+                stop_phrases=None,
+                boilerplate=None,
+            )
+            for s in sentsA
+        ]
+        normB = [
+            normalize_for_retrieval(
+                s,
+                lowercase=cfg["preprocess"].get("lowercase", True),
+                unicode_norm=cfg["preprocess"].get("unicode_normalize", "NFC"),
+                expand_abbrev=cfg["preprocess"].get("abbreviations_expand", True),
+                apply_synonyms=cfg["preprocess"].get("synonyms_expand", True),
+                remove_stop_phrases=False,
+                remove_boilerplate=False,
+                abbreviations=getattr(dicts, "abbreviations", {}),
+                synonyms=getattr(dicts, "synonyms", {}),
+                stop_phrases=None,
+                boilerplate=None,
+            )
+            for s in sentsB
+        ]
+        emb_sa = bi.encode(normA, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
+        emb_sb = bi.encode(normB, batch_size=hw["inference"]["bi_encoder"].get("batch_size_cpu", 32))
+        sim = emb_sa @ emb_sb.T
+        pairs = []
+        for i in range(sim.shape[0]):
+            j = int(np.argmax(sim[i]))
+            score = float(sim[i, j])
+            if score >= SEM_TH:
+                pairs.append((offsA[i][0], offsA[i][1], offsB[j][0], offsB[j][1], score))
+        pairs = sorted(pairs, key=lambda x: x[4], reverse=True)[:SEM_MAX]
+        return [(a0, a1, b0, b1) for a0, a1, b0, b1, _s in pairs]
+
     with timer.section("match_rerank_align"):
-        for i, (a_align, a_disp) in enumerate(zip(chunksA_align, chunksA_disp)):
+        for i, (a_align, a_disp, a_retr) in enumerate(zip(chunksA_align, chunksA_disp, chunksA_retr)):
             # Search... (giữ nguyên)
-            bm_idx  = bm25.search(a_align, topk=bm25_topk)
+            bm_idx  = bm25.search(a_retr, topk=bm25_topk)
             sim_idx = shB.topk_by_hamming(shA_vals[i], k=sim_topk)
             ann_idx = ann.search(embA[i], topk=ann_topk)
             cand = sorted(set(bm_idx + sim_idx + ann_idx))[:max(bm25_topk, ann_topk, sim_topk)]
@@ -211,12 +365,16 @@ def run_compare(
             s_bi_list, s_lex_list, s_bm_list = [], [], []
             for j in cand:
                 b_align = chunksB_align[j]
+                b_retr = chunksB_retr[j]
                 s_bi  = cosine_sim(embA[i], embB[j])
-                base_jac = jaccard_char_ngrams(a_align, b_align, n=5)
-                base_ham = hamming_similarity(shA_vals[i], simhash(b_align))
+                base_jac = jaccard_char_ngrams(a_retr, b_retr, n=5)
+                base_ham = hamming_similarity(shA_vals[i], simhash(b_retr))
                 base_lex = 0.5*base_jac + 0.5*base_ham
                 bp = boilerplate_penalty(a_disp, chunksB_disp[j], boiler_set)
-                s_lex = base_lex * (1.0 - LAMBDA * bp)
+                # Giảm false positives do cụm phổ biến và trích dẫn hợp lệ.
+                sp = stopphrase_penalty(a_retr, b_retr, stop_phrases)
+                cp = citation_penalty(a_disp, chunksB_disp[j], citation_patterns)
+                s_lex = base_lex * (1.0 - LAMBDA * bp) * (1.0 - STOP_LAMBDA * sp) * (1.0 - CIT_LAMBDA * cp)
                 s_bm  = bm25.score_of_cached(j)
                 s_bi_list.append(s_bi); s_lex_list.append(s_lex); s_bm_list.append(s_bm)
 
@@ -261,6 +419,14 @@ def run_compare(
                 
                 # Fallback cũ: if not spans_pairs: ... -> DELETE THIS BLOCK
                 
+                if SEM_ALIGN:
+                    spans_a = [(a0, a1) for (a0, a1, _, _) in spans_pairs]
+                    cov_a = _span_coverage(spans_a, len(a_txt_a))
+                    if cov_a < SEM_MIN_COV:
+                        # Semantic alignment để bắt paraphrase mạnh khi tiling yếu.
+                        sem_pairs = _semantic_span_pairs(a_disp, chunksB_disp[j_local])
+                        spans_pairs = spans_pairs + sem_pairs
+
                 spans_pairs = _nms_spans(spans_pairs, iou_th=IOU_TH)
                 spans_a = [(a0,a1) for (a0,a1,_,_) in spans_pairs]
                 spans_b = [(b0,b1) for (_,_,b0,b1) in spans_pairs]
