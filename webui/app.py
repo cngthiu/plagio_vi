@@ -10,7 +10,7 @@ import shutil
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Iterable
 
 import yaml
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -53,6 +53,96 @@ def _deep_update(base: dict, override: dict) -> dict:
             out[k] = v
     return out
 
+def _get_thresholds(report: Dict[str, Any]) -> Dict[str, float]:
+    cfg = (report.get("meta") or {}).get("cfg") or {}
+    th = cfg.get("thresholds") or {}
+    return {
+        "very_high": float(th.get("very_high", th.get("high", 0.82))),
+        "high": float(th.get("high", 0.72)),
+        "medium": float(th.get("medium", 0.60)),
+    }
+
+def _level_of(score: float, thresholds: Dict[str, float]) -> str:
+    if score >= thresholds["very_high"]:
+        return "very_high"
+    if score >= thresholds["high"]:
+        return "high"
+    if score >= thresholds["medium"]:
+        return "medium"
+    return "low"
+
+def _normalize_pair(p: Dict[str, Any], thresholds: Dict[str, float]) -> Dict[str, Any]:
+    score = p.get("score")
+    if score is None:
+        score = p.get("similarity", p.get("sim", p.get("ratio", 0.0)))
+    try:
+        score = float(score)
+    except Exception:
+        score = 0.0
+    if score > 1.5:
+        score = score / 100.0
+    level = p.get("level") or _level_of(score, thresholds)
+
+    a = p.get("a") or {}
+    b = p.get("b") or {}
+    if isinstance(a, str):
+        a = {"text": a}
+    if isinstance(b, str):
+        b = {"text": b}
+    if not a:
+        a = {"text": p.get("a_text", p.get("text_a", ""))}
+    if not b:
+        b = {"text": p.get("b_text", p.get("text_b", ""))}
+
+    a_spans = a.get("spans") or p.get("spans_a", p.get("a_spans", [])) or []
+    b_spans = b.get("spans") or p.get("spans_b", p.get("b_spans", [])) or []
+    a["spans"] = a_spans
+    b["spans"] = b_spans
+
+    if "char_span_in_doc" not in a:
+        a["char_span_in_doc"] = p.get("a_char_span_in_doc", p.get("a_span_doc", None))
+    if "char_span_in_doc" not in b:
+        b["char_span_in_doc"] = p.get("b_char_span_in_doc", p.get("b_span_doc", None))
+
+    return {
+        "score": score,
+        "level": level,
+        "a_chunk_id": p.get("a_chunk_id", p.get("chunk_a", p.get("a_id", None))),
+        "b_chunk_id": p.get("b_chunk_id", p.get("chunk_b", p.get("b_id", None))),
+        "scores": p.get("scores", {}),
+        "a": a,
+        "b": b,
+    }
+
+def _normalize_report(data: Dict[str, Any]) -> Dict[str, Any]:
+    pairs = data.get("pairs")
+    if pairs is None:
+        pairs = data.get("results", data.get("matches", data.get("items", [])))
+    if not isinstance(pairs, list):
+        pairs = []
+
+    thresholds = _get_thresholds(data)
+    norm_pairs = [_normalize_pair(p, thresholds) for p in pairs]
+
+    summary = data.get("summary") or data.get("stats") or {}
+    levels = {"very_high": 0, "high": 0, "medium": 0, "low": 0}
+    for p in norm_pairs:
+        levels[p["level"]] = levels.get(p["level"], 0) + 1
+    summary["levels"] = summary.get("levels", levels)
+
+    if "chunks_A" not in summary:
+        max_a = max([p.get("a_chunk_id", -1) for p in norm_pairs], default=-1)
+        summary["chunks_A"] = max_a + 1 if max_a >= 0 else 0
+    if "chunks_B" not in summary:
+        max_b = max([p.get("b_chunk_id", -1) for p in norm_pairs], default=-1)
+        summary["chunks_B"] = max_b + 1 if max_b >= 0 else 0
+
+    return {
+        "summary": summary,
+        "pairs": norm_pairs,
+        "meta": data.get("meta", {}),
+    }
+
 # ---------- routes ----------
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -66,7 +156,7 @@ def get_report(path: str):
     p = Path(path)
     if not p.exists() or p.suffix.lower() != ".json":
         raise HTTPException(status_code=404, detail="Report not found")
-    return JSONResponse(content=_read_json_file(p))
+    return JSONResponse(content=_normalize_report(_read_json_file(p)))
 
 @app.get("/api/settings")
 def get_settings(config: str = "configs/default.yaml", hardware: str = "configs/hardware.gpu1650.yaml"):
@@ -181,7 +271,7 @@ def export_csv(report_path: str):
     if not p.exists():
         raise HTTPException(status_code=404, detail="Report not found")
         
-    data = _read_json_file(p)
+    data = _normalize_report(_read_json_file(p))
     pairs = data.get("pairs") or []
     
     buf = io.StringIO()

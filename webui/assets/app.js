@@ -7,6 +7,58 @@ let currentPairIdx = -1;
 const $ = id => document.getElementById(id);
 const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+function getThresholds(report) {
+    const th = report?.meta?.cfg?.thresholds || {};
+    return {
+        very_high: th.very_high ?? th.high ?? 0.82,
+        high: th.high ?? 0.72,
+        medium: th.medium ?? 0.60
+    };
+}
+
+function levelOf(score, th) {
+    if (score >= th.very_high) return 'very_high';
+    if (score >= th.high) return 'high';
+    if (score >= th.medium) return 'medium';
+    return 'low';
+}
+
+function normalizeReport(report) {
+    if (!report) return { pairs: [], summary: { levels: {} }, meta: {} };
+    const th = getThresholds(report);
+    const rawPairs = report.pairs || report.results || report.matches || report.items || [];
+    const pairs = rawPairs.map(p => {
+        let score = p.score ?? p.similarity ?? p.sim ?? p.ratio ?? 0;
+        score = Number(score);
+        if (score > 1.5) score = score / 100;
+        const level = p.level || levelOf(score, th);
+        let a = p.a || { text: p.a_text || p.text_a || '' };
+        let b = p.b || { text: p.b_text || p.text_b || '' };
+        if (typeof a === 'string') a = { text: a };
+        if (typeof b === 'string') b = { text: b };
+        a.spans = a.spans || p.spans_a || p.a_spans || [];
+        b.spans = b.spans || p.spans_b || p.b_spans || [];
+        if (!a.char_span_in_doc) a.char_span_in_doc = p.a_char_span_in_doc || p.a_span_doc || null;
+        if (!b.char_span_in_doc) b.char_span_in_doc = p.b_char_span_in_doc || p.b_span_doc || null;
+        return {
+            score,
+            level,
+            a_chunk_id: p.a_chunk_id ?? p.chunk_a ?? p.a_id ?? null,
+            b_chunk_id: p.b_chunk_id ?? p.chunk_b ?? p.b_id ?? null,
+            scores: p.scores || {},
+            a,
+            b
+        };
+    });
+    const summary = report.summary || report.stats || {};
+    if (!summary.levels) {
+        const levels = { very_high: 0, high: 0, medium: 0, low: 0 };
+        pairs.forEach(p => { levels[p.level] = (levels[p.level] || 0) + 1; });
+        summary.levels = levels;
+    }
+    return { summary, pairs, meta: report.meta || {} };
+}
+
 // --- 1. Navigation & Init ---
 document.querySelectorAll('.nav-item').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -119,7 +171,8 @@ function renderHeatmap(pairs, docLen) {
     if (docLen === 0) return;
 
     // Chỉ vẽ các đoạn High/Very High để đỡ rối
-    pairs.filter(p => p.score >= 0.72).forEach(p => {
+    const th = getThresholds(gReport || {});
+    pairs.filter(p => p.score >= th.high).forEach(p => {
         const [start, end] = p.a.char_span_in_doc || [0, 0];
         const leftPct = (start / docLen) * 100;
         const widthPct = ((end - start) / docLen) * 100;
@@ -132,7 +185,7 @@ function renderHeatmap(pairs, docLen) {
         el.onclick = () => { jumpToPair(p); };
         
         // Color based on score
-        if (p.score >= 0.82) el.style.backgroundColor = 'var(--danger)';
+        if (p.score >= th.very_high) el.style.backgroundColor = 'var(--danger)';
         else el.style.backgroundColor = 'var(--warning)';
         
         container.appendChild(el);
@@ -144,6 +197,9 @@ function renderMarkedText(text, spans, level) {
     if (!text) return '';
     // spans: [[start, end], ...] relative to text
     // Sort spans
+    if (!Array.isArray(spans)) {
+        spans = [];
+    }
     spans.sort((a, b) => a[0] - b[0]);
     
     let html = '';
@@ -204,16 +260,19 @@ function selectPair(pair, el) {
     
     // Helper to get text
     const getHTML = (side) => {
-        const text = pair[side].text;
-        const spans = pair[side].spans;
-        if (showOnlyMatch) {
+        const block = pair[side] || {};
+        const text = block.text || '';
+        const spans = block.spans || [];
+        const snippets = block.snippets || [];
+        if (showOnlyMatch && snippets.length > 0) {
             // Chỉ hiện các đoạn snippets
-            return pair[side].snippets.map(s => 
+            return snippets.map(s => 
                 `<div style="margin-bottom:10px; border-bottom:1px dashed #eee; padding-bottom:4px;">
                    ...${esc(s.before)}<mark class="lvl-${pair.level}">${esc(s.hit)}</mark>${esc(s.after)}...
                  </div>`
             ).join('');
         } else {
+            if (!text) return `<div class="muted">Không có dữ liệu hiển thị.</div>`;
             return `<pre>${renderMarkedText(text, spans, pair.level)}</pre>`;
         }
     };
@@ -278,19 +337,18 @@ async function loadReport(path) {
             alert(`Không tải được report (status ${res.status}): ${detail}`);
             return;
         }
-        gReport = await res.json();
+        gReport = normalizeReport(await res.json());
         
         // Chuyển tab
         document.querySelector('[data-tab="results"]').click();
         
         // Update Metadata
+        $('reportPath').value = path;
         $('reportMeta').innerText = `Report: ${path.split('/').pop()} | Generated at: ${new Date().toLocaleTimeString()}`;
         
         // Init Data
-        gFilteredPairs = gReport.pairs.sort((a,b) => b.score - a.score);
-        
+        applyFilters();
         renderCharts(gReport);
-        renderResultsList();
         if (gFilteredPairs.length > 0) selectPair(gFilteredPairs[0]);
         
     } catch (e) {
@@ -299,15 +357,64 @@ async function loadReport(path) {
     }
 }
 
+function applyFilters() {
+    const val = $('filterLevel')?.value || '';
+    const q = ($('searchText')?.value || '').trim().toLowerCase();
+    const minScore = (Number($('scoreSlider')?.value || 0) / 100);
+    const base = (gReport?.pairs || []);
+    gFilteredPairs = base.filter(p => {
+        if (val && p.level !== val) return false;
+        if (p.score < minScore) return false;
+        if (!q) return true;
+        const a = (p.a?.text || '').toLowerCase();
+        const b = (p.b?.text || '').toLowerCase();
+        return a.includes(q) || b.includes(q);
+    }).sort((a,b) => b.score - a.score);
+    renderResultsList();
+    if (gFilteredPairs.length > 0) {
+        selectPair(gFilteredPairs[0]);
+    } else {
+        $('detailA').innerHTML = '<div class="muted">Không có dữ liệu.</div>';
+        $('detailB').innerHTML = '<div class="muted">Không có dữ liệu.</div>';
+    }
+}
+
 // Init Events
 $('compare-form').onsubmit = runCompare;
 $('filterLevel').onchange = () => {
-    const val = $('filterLevel').value;
-    gFilteredPairs = (gReport?.pairs||[]).filter(p => !val || p.level === val);
-    renderResultsList();
+    applyFilters();
+};
+$('searchText').oninput = () => {
+    applyFilters();
+};
+$('scoreSlider').oninput = () => {
+    $('scoreValue').innerText = `${$('scoreSlider').value}%`;
+    applyFilters();
 };
 $('onlyMatches').onchange = () => {
     // Re-render current pair selection
     const active = document.querySelector('.result-item.active');
     if (active) active.click();
 };
+
+$('btnLoadReport').onclick = () => {
+    const path = $('reportPath').value.trim();
+    if (!path) return alert('Vui lòng nhập đường dẫn report.json');
+    loadReport(path);
+};
+
+$('btnExportCSV').onclick = () => {
+    const path = $('reportPath').value.trim();
+    if (!path) return alert('Chưa có đường dẫn report.json để export');
+    window.open(`/api/export_csv?report_path=${encodeURIComponent(path)}`, '_blank');
+};
+
+$('btnOpenHtml').onclick = () => {
+    const path = $('reportPath').value.trim().replace(/report\.json$/i, 'report.html');
+    if (!path) return alert('Chưa có đường dẫn report.json để mở HTML');
+    window.open(`/api/download_report_html?path=${encodeURIComponent(path)}`, '_blank');
+};
+
+if ($('scoreSlider') && $('scoreValue')) {
+    $('scoreValue').innerText = `${$('scoreSlider').value}%`;
+}
